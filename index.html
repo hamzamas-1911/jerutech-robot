@@ -194,8 +194,8 @@ const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /* ---------------- store: Supabase (no student accounts), Claude db, or local ---------------- */
 // Fill these two after creating the Supabase project (Project Settings → API). The anon/publishable key is public by design.
-const SUPABASE_URL = "PASTE_SUPABASE_URL_HERE";
-const SUPABASE_KEY = "PASTE_SUPABASE_ANON_KEY_HERE";
+const SUPABASE_URL = "https://jswqfjlmrfkvhqrpheox.supabase.co";
+const SUPABASE_KEY = "sb_publishable_42AAgZsi3aM3avJsuh4bKg_PmuDwbYY";
 const TABLE = "rb_docs";
 const Store = {
   mode:"init", db:null, sb:null, chains:{}, listeners:[], cache:new Map(),
@@ -464,15 +464,47 @@ function scoreOf(t,adj){
 }
 
 /* ---------------- shared state ---------------- */
-let controlLoaded=false, control=null, players=[], adjusts={};
+let controlLoaded=false, control=null, players=[], adjusts={}, assign=null;
 const subs={};
 function subControl(){ if(subs.control) return; subs.control=Store.watchDoc("control/session",d=>{ controlLoaded=true; control=d; onShared(); }); }
 function subPlayers(){ if(subs.players) return; subs.players=Store.watchColl("players",a=>{ players=a; onShared(); }); }
 function subAdjust(){ if(subs.adjust) return; subs.adjust=Store.watchColl("adjust",a=>{ adjusts=Object.fromEntries(a.map(x=>[x.id,x.data])); onShared(); }); }
-function onShared(){ if(view==="team") teamShared(); else if(view==="mentor") renderMentor(); else if(view==="screen") renderScreen(); }
+function subAssign(){ if(subs.assign) return; subs.assign=Store.watchDoc("control/assign",d=>{ assign=d; onShared(); }); }
+function onShared(){ if(view==="team") teamShared(); else if(view==="mentor"){ autoAssign(); renderMentor(); } else if(view==="screen") renderScreen(); }
 function sessionPlayers(){ return control? players.filter(t=>t.data && t.data.sessionId===control.sessionId) : []; }
 const normTeam = t=>String(t||"").replace(/\s+/g," ").trim();
 function teamList(){ return (control&&Array.isArray(control.teams))? control.teams.map(normTeam).filter(Boolean) : []; }
+/* teams: the mentor sets how many teams and how many students in each; students only type a name */
+function teamCfg(){
+  const n=Math.max(2,Math.min(12, parseInt(control&&control.teamCount)||6));
+  const size=Math.max(1,Math.min(8, parseInt(control&&control.teamSize)||4));
+  const names=teamList(); return {n,size,list:Array.from({length:n},(_,i)=>names[i]||("فريق "+(i+1)))};
+}
+function assignMap(){ return (assign && control && assign.sessionId===control.sessionId && assign.map) ? assign.map : {}; }
+function myAssign(id){ return assignMap()[id]||null; }
+function placeOne(cur,list,size){
+  const members={}; list.forEach(t=>members[t]=[]);
+  Object.values(cur).forEach(a=>{ if(members[a.team]) members[a.team].push(a.group); });
+  let cands=list.filter(t=>members[t].length<size); if(!cands.length) cands=list.slice();
+  const min=Math.min(...cands.map(t=>members[t].length)); cands=cands.filter(t=>members[t].length===min);
+  const team=cands[Math.floor(Math.random()*cands.length)];
+  const counts={}; GROUPS.forEach(g=>counts[g.id]=0); Object.values(cur).forEach(a=>{ if(counts[a.group]!=null) counts[a.group]++; });
+  let gs=GROUPS.map(g=>g.id).filter(id=>!members[team].includes(id)); if(!gs.length) gs=GROUPS.map(g=>g.id);
+  const gm=Math.min(...gs.map(id=>counts[id])); gs=gs.filter(id=>counts[id]===gm);
+  return {team, group:gs[Math.floor(Math.random()*gs.length)]};
+}
+function saveAssign(map){ assign={sessionId:control.sessionId,map}; Store.set("control/assign",assign); }
+function autoAssign(){
+  if(!mentorOk||!control||!control.sessionId) return;
+  const cur={...assignMap()}, missing=sessionPlayers().filter(p=>!cur[p.id]);
+  if(!missing.length) return;
+  const {list,size}=teamCfg(); missing.forEach(p=>{ cur[p.id]=placeOne(cur,list,size); }); saveAssign(cur);
+}
+function shuffleAll(){
+  const ids=sessionPlayers().map(p=>p.id);
+  for(let i=ids.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [ids[i],ids[j]]=[ids[j],ids[i]]; }
+  const {list,size}=teamCfg(), cur={}; ids.forEach(id=>{ cur[id]=placeOne(cur,list,size); }); saveAssign(cur);
+}
 
 /* ================= STUDENT VIEW ================= */
 let me=null, ui={}, running=false, stopFlag=false;
@@ -488,66 +520,67 @@ function pushTeam(){
 function teamShared(){
   if(!me) return;
   if(control && me.sessionId && control.sessionId!==me.sessionId){ me=freshMe(); saveMe(); ui.mode=null; }
+  const a=me.sessionId? myAssign(me.teamId) : null;
+  if(a && (a.team!==me.team || (!me.started && a.group!==me.group))){
+    me.team=a.team; if(!me.started) me.group=a.group; saveMe(); pushTeam(); if(ui.mode==="play") ui.mode=null;
+  }
   renderTeam();
 }
 function renderTeam(){
   const app=$("#app");
-  $("#who").textContent = me && me.name ? (me.name+" · "+me.team+" · لوحات "+(GMAP[me.group]||{}).label) : "";
+  $("#who").textContent = me && me.name ? (me.name+(me.team?" · "+me.team:"")+(me.group?" · لوحات "+GMAP[me.group].label:"")) : "";
   let mode;
   if(!me.sessionId) mode="register";
   else if(me.done) mode="done";
-  else if(!control || control.state==="lobby") mode="lobby";
+  else if(!control || control.state==="lobby" || !me.group) mode="lobby";
   else mode="play";
   if(mode!=="play"){ ui.mode=mode; }
   if(mode==="register") return renderRegister(app);
   if(mode==="lobby") return renderLobby(app);
   if(mode==="done") return renderDone(app);
+  if(!me.started){ me.started=true; saveMe(); }
   if(ui.mode!=="play"){ ui.mode="play"; buildPlay(app); } else updatePlay();
 }
-function pickGroup(team){
-  const ps=sessionPlayers(), counts={}; GROUPS.forEach(g=>counts[g.id]=0);
-  ps.forEach(p=>{ if(counts[p.data.group]!=null) counts[p.data.group]++; });
-  const mates=new Set(ps.filter(p=>normTeam(p.data.team).toLowerCase()===team.toLowerCase()).map(p=>p.data.group));
-  let c=GROUPS.map(g=>g.id).filter(id=>!mates.has(id)); if(!c.length) c=GROUPS.map(g=>g.id);
-  const min=Math.min(...c.map(id=>counts[id])); c=c.filter(id=>counts[id]===min);
-  return c[Math.floor(Math.random()*c.length)];
-}
 function renderRegister(app){
-  const live=control && control.sessionId, list=teamList();
-  const known=[...new Set(sessionPlayers().map(p=>normTeam(p.data.team)).filter(Boolean))];
-  const nm=ui.nameDraft||"", tm=ui.teamDraft||"", fid=document.activeElement&&document.activeElement.id;
-  app.innerHTML=`<div class="wrap"><div class="card stack" style="max-width:560px;margin:24px auto">
-      <h2>سجّلوا أسماءكم</h2>
-      <p class="muted" style="margin:0">كل واحد بيشتغل على جهازه وبكوده. الصفحة بتعطي كل واحد لوحات خاصة فيه.</p>
+  const live=control && control.sessionId;
+  const nm=ui.nameDraft||"", fid=document.activeElement&&document.activeElement.id;
+  app.innerHTML=`<div class="wrap"><div class="card stack" style="max-width:520px;margin:24px auto">
+      <h2>اكتبوا اسمكم</h2>
+      <p class="muted" style="margin:0">الصفحة بتوزّعكم على الفرق، وبتعطي كل واحد لوحات خاصة فيه.</p>
       <label for="pName">الاسم</label>
       <input id="pName" maxlength="30" value="${esc(nm)}" placeholder="الاسم واسم العائلة" autocomplete="off">
-      <label for="pTeam">الفريق</label>
-      ${list.length? `<select id="pTeam"><option value="">اختاروا الفريق</option>${list.map(t=>`<option ${t===tm?"selected":""}>${esc(t)}</option>`).join("")}</select>`
-        : `<input id="pTeam" maxlength="24" list="teamList" value="${esc(tm)}" placeholder="اسم الفريق" autocomplete="off"><datalist id="teamList">${known.map(t=>`<option value="${esc(t)}"></option>`).join("")}</datalist>`}
       <div class="row"><button class="btn-main" id="regBtn">ادخلوا</button>
         <span class="muted" id="regMsg">${live?"":"المرشد لسا ما فتح الجلسة. استنّوا شوي."}</span></div>
     </div></div>`;
-  const nI=$("#pName"), tI=$("#pTeam"), btn=$("#regBtn");
-  const ok=()=>{ btn.disabled=!(live && nI.value.trim() && normTeam(tI.value)); };
+  const nI=$("#pName"), btn=$("#regBtn");
+  const ok=()=>{ btn.disabled=!(live && nI.value.trim().length>=2); };
   nI.addEventListener("input",()=>{ ui.nameDraft=nI.value; ok(); });
-  tI.addEventListener(list.length?"change":"input",()=>{ ui.teamDraft=tI.value; ok(); });
+  nI.addEventListener("keydown",e=>{ if(e.key==="Enter" && !btn.disabled) btn.click(); });
   ok();
-  if(fid==="pName"||fid==="pTeam"){ const f=$("#"+fid); f.focus(); if(f.setSelectionRange&&f.tagName==="INPUT") f.setSelectionRange(f.value.length,f.value.length); }
+  if(fid==="pName"){ nI.focus(); nI.setSelectionRange(nI.value.length,nI.value.length); }
   btn.addEventListener("click",()=>{
     if(!(control&&control.sessionId)) return;
-    let team=normTeam(tI.value).slice(0,24); const same=known.find(k=>k.toLowerCase()===team.toLowerCase()); if(same) team=same;
-    me.name=nI.value.trim().slice(0,30); me.team=team; me.group=pickGroup(team); me.sessionId=control.sessionId; me.level=1; lvState(1);
+    me.name=nI.value.trim().slice(0,30); me.team=""; me.group=null; me.started=false; me.sessionId=control.sessionId; me.level=1; lvState(1);
     saveMe(); pushTeam(); beep("ok"); renderTeam();
   });
 }
 function renderLobby(app){
-  const g=GMAP[me.group];
+  if(!me.group){
+    app.innerHTML=`<div class="wrap center"><div class="card stack" style="max-width:520px">
+      <h2>أهلا ${esc(me.name)}</h2>
+      <p class="muted" style="margin:0">سجّلناك. المرشد بيوزّع الفرق هلأ، استنّى ثواني.</p></div></div>`;
+    return;
+  }
+  const g=GMAP[me.group], map=assignMap();
+  const mates=sessionPlayers().filter(p=>p.id!==me.teamId && map[p.id] && map[p.id].team===me.team).map(p=>p.data.name);
   app.innerHTML=`<div class="wrap center"><div class="card stack" style="max-width:520px">
     <span class="gtag" style="--g:${g.color};margin:auto;width:56px;height:56px;font-size:2rem">${g.label}</span>
     <h2>أهلا ${esc(me.name)}</h2>
-    <p class="muted" style="margin:0">فريق ${esc(me.team)} · لوحاتك: مجموعة ${g.label}. استنّوا المرشد يبلّش اللعبة للكل مع بعض.</p>
+    <p style="margin:0;font-size:1.25rem">إنت بـ <strong>${esc(me.team)}</strong></p>
+    <p class="muted" style="margin:0">${mates.length?("معك: "+mates.map(esc).join("، ")):"لسا ما في حدا ثاني بفريقك."}</p>
+    <p class="muted" style="margin:0">اقعدوا مع فريقكم، واستنّوا المرشد يبلّش اللعبة للكل مع بعض.</p>
     <div class="muted">فيها 4 مستويات: ترجمة، اختصار بـ <code>for</code>، دالة بـ <code>def</code>، ومتاهة بـ <code>if</code>.</div>
-    <div class="muted" style="font-size:.9rem">كل واحد بيكتب كوده لحاله. بتقدروا تتناقشوا مع فريقكم، بس بدون نسخ: كل واحد إله لوحات مختلفة.</div></div></div>`;
+    <div class="muted" style="font-size:.9rem">كل واحد بيكتب كوده لحاله. بتقدروا تتناقشوا، بس بدون نسخ: كل واحد إله لوحات مختلفة (لوحاتك: ${g.label}).</div></div></div>`;
 }
 function renderDone(app){
   const adj=adjusts[me.teamId]; const sc=scoreOf(me,adj);
@@ -793,7 +826,7 @@ let mentorOk=false; try{ mentorOk=sessionStorage.getItem("rb5:pin")==="1"; }catc
 let keyData=null, keyGroup="A", mentorOpen={}, teamFilter="";
 function getKey(){ if(!keyData){ try{ keyData=JSON.parse(decodeURIComponent(escape(atob(KEY_B64)))); }catch(e){ keyData={}; } } return keyData; }
 const mins = sec=> sec==null? "" : (Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0"));
-function playerRows(){ return sessionPlayers().map(t=>({id:t.id,...t.data,score:scoreOf(t.data,adjusts[t.id])})); }
+function playerRows(){ const map=assignMap(); return sessionPlayers().map(t=>({id:t.id,...t.data,team:(map[t.id]||{}).team||t.data.team||"",group:t.data.group||(map[t.id]||{}).group,score:scoreOf(t.data,adjusts[t.id])})); }
 function teamAgg(ps){
   const by={};
   for(const p of ps){ const k=normTeam(p.team)||"بدون فريق"; (by[k]=by[k]||{name:k,members:[]}).members.push(p); }
@@ -818,9 +851,9 @@ function renderMentor(){
     $("#pinF").addEventListener("submit",e=>{ e.preventDefault(); if($("#pin").value.trim()===PIN){ mentorOk=true; try{sessionStorage.setItem("rb5:pin","1")}catch(_){} renderMentor(); } else $("#pinMsg").textContent="الرمز غلط."; });
     return;
   }
-  if(controlLoaded && control===null && !ui.creating){ ui.creating=true; Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:[]}).then(()=>{ui.creating=false;}); }
+  if(controlLoaded && control===null && !ui.creating){ ui.creating=true; Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:[],teamCount:6,teamSize:4}).then(()=>{ui.creating=false;}); }
   const fid=document.activeElement&&document.activeElement.id;
-  if(fid==="teamsBox") return; // don't wipe a list being typed
+  if(fid==="teamsBox"||fid==="tCount"||fid==="tSize") return; // don't wipe fields being typed
   const st=control?control.state:"lobby";
   const all=playerRows(), aggs=teamAgg(all).sort((a,b)=>a.name.localeCompare(b.name,"ar"));
   const ps=all.filter(p=>!teamFilter||normTeam(p.team)===teamFilter).sort((a,b)=>normTeam(a.team).localeCompare(normTeam(b.team),"ar")||b.score.total-a.score.total);
@@ -834,10 +867,20 @@ function renderMentor(){
         ${st==="paused"?`<button class="btn-main" id="mResume">كمّلوا</button>`:""}
         <button class="btn-bad" id="mNew">جلسة جديدة</button>
       </div></div>
-    <div class="card stack"><h3>أسماء الفرق</h3>
-      <p class="muted" style="margin:0">اختياري. إذا كتبتوا الأسماء هون، الطلاب بيختاروا من قائمة، وما في غلطات إملاء. كل اسم بسطر.</p>
+    <div class="card stack"><h3>توزيع الفرق</h3>
+      <p class="muted" style="margin:0">الطالب بيكتب اسمه بس. الصفحة بتحطه بالفريق الأصغر، وبتعطيه لوحات غير لوحات فريقه.</p>
+      <div class="row">
+        <label for="tCount">عدد الفرق</label><input id="tCount" type="number" min="2" max="12" value="${teamCfg().n}" style="width:5.5em">
+        <label for="tSize">طلاب بكل فريق</label><input id="tSize" type="number" min="1" max="8" value="${teamCfg().size}" style="width:5.5em">
+      </div>
+      <label for="teamsBox">أسماء الفرق (اختياري، كل اسم بسطر)</label>
       <textarea id="teamsBox" rows="3" style="font:inherit;border:1px solid var(--line);border-radius:10px;padding:.5rem;background:var(--surface);color:var(--ink)">${esc(teamList().join("\n"))}</textarea>
-      <div class="row"><button id="saveTeams">احفظوا القائمة</button><span class="muted" id="teamsMsg"></span></div></div>
+      <div class="row"><button class="btn-main" id="saveTeams">احفظوا${st==="lobby"&&all.length?" ووزّعوا من جديد":""}</button>
+        ${st==="lobby"&&all.length?`<button id="shuffleBtn">اخلطوا الفرق من جديد</button>`:""}
+        <span class="muted" id="teamsMsg">${st!=="lobby"?"اللعبة بلّشت: التوزيع ثابت. طلاب جدد بينضافوا للفريق الأصغر.":""}</span></div>
+      <div class="groups" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">${teamCfg().list.map(t=>{ const ms=all.filter(p=>p.team===t);
+        return `<div class="hint"><strong>${esc(t)}</strong> <span class="muted">(${ms.length}/${teamCfg().size})</span><div class="muted" style="font-size:.9rem">${ms.map(p=>esc(p.name)).join("، ")||"–"}</div></div>`; }).join("")}</div>
+    </div>
     <div class="card stack"><h3>الفرق</h3><div class="tscroll"><table>
       <thead><tr><th>الفريق</th><th>طلاب</th><th>حلّوا مستوى 1 / 2 / 3 / 4</th><th>المعدل</th></tr></thead>
       <tbody>${aggs.map(t=>`<tr><td><button class="btn-ghost" data-tf="${esc(t.name)}" style="padding:.2rem .5rem;${teamFilter===t.name?"border-color:var(--accent)":""}">${esc(t.name)}</button></td><td class="mono">${t.n}</td><td class="mono">${t.solved.join(" / ")}</td><td class="score" style="font-size:1.2rem">${t.avg}</td></tr>`).join("")||`<tr><td colspan="4" class="muted">لسا ما في حدا.</td></tr>`}</tbody></table></div></div>
@@ -878,8 +921,13 @@ function renderMentor(){
   on("[data-refund]",b=>adjust(b.dataset.refund,"refunds"));
   on("[data-verbal]",b=>adjust(b.dataset.verbal,"verbal"));
   on("[data-bonus]",b=>adjust(b.dataset.bonus,"bonus"));
-  on("#saveTeams",()=>{ const list=[...new Set($("#teamsBox").value.split("\n").map(normTeam).filter(Boolean))].slice(0,30);
-    Store.set("control/session",{...(control||{state:"lobby",sessionId:rid(),startedAt:null}),teams:list}); $("#teamsMsg").textContent="انحفظت."; });
+  on("#saveTeams",()=>{ const list=[...new Set($("#teamsBox").value.split("\n").map(normTeam).filter(Boolean))].slice(0,12);
+    const n=Math.max(2,Math.min(12,parseInt($("#tCount").value)||6)), size=Math.max(1,Math.min(8,parseInt($("#tSize").value)||4));
+    control={...(control||{state:"lobby",sessionId:rid(),startedAt:null}),teams:list,teamCount:n,teamSize:size};
+    Store.set("control/session",control);
+    if(control.state==="lobby" && sessionPlayers().length) shuffleAll();
+    renderMentor(); const m=$("#teamsMsg"); if(m) m.textContent="انحفظ."; });
+  on("#shuffleBtn",()=>{ shuffleAll(); renderMentor(); });
   on("#copyRes",async()=>{ const txt=resultsTSV(ps); let ok=false;
     try{ await navigator.clipboard.writeText(txt); ok=true; }catch(e){}
     const box=$("#copyBox"); if(ok){ $("#copyRes").textContent="انتسخت! الصقوها بـ Excel أو Sheets"; }
@@ -889,7 +937,9 @@ function renderMentor(){
   const P=$("#mPause"); if(P) P.addEventListener("click",()=>Store.set("control/session",{...control,state:"paused"}));
   const R=$("#mResume"); if(R) R.addEventListener("click",()=>Store.set("control/session",{...control,state:"running"}));
   $("#mNew").addEventListener("click",async e=>{ const b=e.currentTarget; if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="متأكدين؟ رح تنمسح نتائج كل الطلاب"; return; }
-    await Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:teamList()});
+    const keep={teams:teamList(),teamCount:teamCfg().n,teamSize:teamCfg().size};
+    await Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,...keep});
+    await Store.del("control/assign");
     for(const t of players) await Store.del("players/"+t.id);
     for(const id in adjusts) await Store.del("adjust/"+id); });
 }
@@ -937,7 +987,7 @@ window.addEventListener("hashchange",route);
 (async function boot(){
   $("#app").innerHTML=`<div class="wrap center"><div class="muted">بيتحمّل…</div></div>`;
   await Store.init();
-  subControl(); subPlayers(); subAdjust();
+  subControl(); subPlayers(); subAdjust(); subAssign();
   route();
   if(!skulptReady()) setTimeout(()=>{ if(!skulptReady() && view==="team"){ const o=$("#out"); if(o) setOut("بايثون ما تحمّلت. افحصوا الإنترنت وحدّثوا الصفحة.","bad"); } },12000);
 })();
