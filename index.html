@@ -230,7 +230,7 @@ const Store = {
       if(pl.eventType==="DELETE"){ const p=pl.old&&pl.old.path; if(p){ this.cache.delete(p); this.emit(p); } }
       else if(pl.new&&pl.new.path){ this.cache.set(pl.new.path,pl.new.data); this.emit(pl.new.path); }
     }).subscribe(st=>{ if(st==="SUBSCRIBED"){ clearTimeout(t); netState="live"; setNet(); } else if(st==="CHANNEL_ERROR"||st==="TIMED_OUT"){ netState="slow"; setNet(); } });
-    setInterval(()=>this.supaLoad(false).catch(()=>{}), 15000); // safety net if websockets are blocked
+    setInterval(()=>this.supaLoad(false).catch(()=>{}), 5000); // safety net if websockets are blocked
   },
   goLocal(){
     this.mode="local"; this.db=null;
@@ -532,7 +532,7 @@ function renderTeam(){
   let mode;
   if(!me.sessionId) mode="register";
   else if(me.done) mode="done";
-  else if(!control || control.state==="lobby" || !me.group) mode="lobby";
+  else if(!control || control.state==="lobby" || control.state==="closed" || !me.group) mode="lobby";
   else mode="play";
   if(mode!=="play"){ ui.mode=mode; }
   if(mode==="register") return renderRegister(app);
@@ -542,7 +542,7 @@ function renderTeam(){
   if(ui.mode!=="play"){ ui.mode="play"; buildPlay(app); } else updatePlay();
 }
 function renderRegister(app){
-  const live=control && control.sessionId;
+  const live=!!(control && control.sessionId && (control.state==="lobby"||control.state==="running"||control.state==="paused"));
   const nm=ui.nameDraft||"", fid=document.activeElement&&document.activeElement.id;
   app.innerHTML=`<div class="wrap"><div class="card stack" style="max-width:520px;margin:24px auto">
       <h2>اكتبوا اسمكم</h2>
@@ -550,7 +550,7 @@ function renderRegister(app){
       <label for="pName">الاسم</label>
       <input id="pName" maxlength="30" value="${esc(nm)}" placeholder="الاسم واسم العائلة" autocomplete="off">
       <div class="row"><button class="btn-main" id="regBtn">ادخلوا</button>
-        <span class="muted" id="regMsg">${live?"":"المرشد لسا ما فتح الجلسة. استنّوا شوي."}</span></div>
+        <span class="muted" id="regMsg">${live?"":"التسجيل لسا مسكّر. استنّوا المرشد يفتحه."}</span></div>
     </div></div>`;
   const nI=$("#pName"), btn=$("#regBtn");
   const ok=()=>{ btn.disabled=!(live && nI.value.trim().length>=2); };
@@ -559,7 +559,7 @@ function renderRegister(app){
   ok();
   if(fid==="pName"){ nI.focus(); nI.setSelectionRange(nI.value.length,nI.value.length); }
   btn.addEventListener("click",()=>{
-    if(!(control&&control.sessionId)) return;
+    if(!live) return;
     me.name=nI.value.trim().slice(0,30); me.team=""; me.group=null; me.started=false; me.sessionId=control.sessionId; me.level=1; lvState(1);
     saveMe(); pushTeam(); beep("ok"); renderTeam();
   });
@@ -851,18 +851,19 @@ function renderMentor(){
     $("#pinF").addEventListener("submit",e=>{ e.preventDefault(); if($("#pin").value.trim()===PIN){ mentorOk=true; try{sessionStorage.setItem("rb5:pin","1")}catch(_){} renderMentor(); } else $("#pinMsg").textContent="الرمز غلط."; });
     return;
   }
-  if(controlLoaded && control===null && !ui.creating){ ui.creating=true; Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:[],teamCount:6,teamSize:4}).then(()=>{ui.creating=false;}); }
+  if(controlLoaded && control===null && !ui.creating){ ui.creating=true; Store.set("control/session",{state:"closed",sessionId:rid(),startedAt:null,fresh:true,teams:[],teamCount:6,teamSize:4}).then(()=>{ui.creating=false;}); }
   const fid=document.activeElement&&document.activeElement.id;
   if(fid==="teamsBox"||fid==="tCount"||fid==="tSize") return; // don't wipe fields being typed
-  const st=control?control.state:"lobby";
+  const st=control?control.state:"closed", pre=(st==="closed"||st==="lobby");
   const all=playerRows(), aggs=teamAgg(all).sort((a,b)=>a.name.localeCompare(b.name,"ar"));
   const ps=all.filter(p=>!teamFilter||normTeam(p.team)===teamFilter).sort((a,b)=>normTeam(a.team).localeCompare(normTeam(b.team),"ar")||b.score.total-a.score.total);
   const best=bestCode(all); const k=getKey();
   app.innerHTML=`<div class="wrap stack">
     <div class="card row" style="justify-content:space-between">
-      <div class="row"><h2>الجلسة</h2><span class="pill ${st==="running"?"live":(st==="paused"?"warn":"")}">${{lobby:"انتظار",running:"شغّالة",paused:"واقفة"}[st]||st}</span><span class="muted">${all.length} طلاب · ${aggs.length} فرق</span></div>
+      <div class="row"><h2>الجلسة</h2><span class="pill ${st==="running"?"live":(st==="paused"?"warn":"")}">${{closed:"التسجيل مسكّر",lobby:"التسجيل مفتوح",running:"شغّالة",paused:"واقفة"}[st]||st}</span><span class="muted">${all.length} طلاب · ${aggs.length} فرق</span></div>
       <div class="row">
-        ${st==="lobby"?`<button class="btn-main" id="mStart">ابدأوا للكل</button>`:""}
+        ${st==="closed"?`<button class="btn-main" id="mOpen">١. افتحوا التسجيل</button>`:""}
+        ${st==="lobby"?`<button class="btn-main" id="mStart" ${all.length?"":"disabled"}>٢. ابدأوا اللعبة للكل</button>`:""}
         ${st==="running"?`<button class="btn-gold" id="mPause">وقّفوا مؤقتًا</button>`:""}
         ${st==="paused"?`<button class="btn-main" id="mResume">كمّلوا</button>`:""}
         <button class="btn-bad" id="mNew">جلسة جديدة</button>
@@ -875,9 +876,9 @@ function renderMentor(){
       </div>
       <label for="teamsBox">أسماء الفرق (اختياري، كل اسم بسطر)</label>
       <textarea id="teamsBox" rows="3" style="font:inherit;border:1px solid var(--line);border-radius:10px;padding:.5rem;background:var(--surface);color:var(--ink)">${esc(teamList().join("\n"))}</textarea>
-      <div class="row"><button class="btn-main" id="saveTeams">احفظوا${st==="lobby"&&all.length?" ووزّعوا من جديد":""}</button>
-        ${st==="lobby"&&all.length?`<button id="shuffleBtn">اخلطوا الفرق من جديد</button>`:""}
-        <span class="muted" id="teamsMsg">${st!=="lobby"?"اللعبة بلّشت: التوزيع ثابت. طلاب جدد بينضافوا للفريق الأصغر.":""}</span></div>
+      <div class="row"><button class="btn-main" id="saveTeams">احفظوا${pre&&all.length?" ووزّعوا من جديد":""}</button>
+        ${pre&&all.length?`<button id="shuffleBtn">اخلطوا الفرق من جديد</button>`:""}
+        <span class="muted" id="teamsMsg">${pre?(st==="closed"?"جهّزوا الفرق، وبعدين افتحوا التسجيل.":"الطلاب بيسجّلوا هلأ. لما الفرق تجهز، ابدأوا اللعبة."):"اللعبة بلّشت: التوزيع ثابت. طلاب جدد بينضافوا للفريق الأصغر."}</span></div>
       <div class="groups" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">${teamCfg().list.map(t=>{ const ms=all.filter(p=>p.team===t);
         return `<div class="hint"><strong>${esc(t)}</strong> <span class="muted">(${ms.length}/${teamCfg().size})</span><div class="muted" style="font-size:.9rem">${ms.map(p=>esc(p.name)).join("، ")||"–"}</div></div>`; }).join("")}</div>
     </div>
@@ -923,9 +924,9 @@ function renderMentor(){
   on("[data-bonus]",b=>adjust(b.dataset.bonus,"bonus"));
   on("#saveTeams",()=>{ const list=[...new Set($("#teamsBox").value.split("\n").map(normTeam).filter(Boolean))].slice(0,12);
     const n=Math.max(2,Math.min(12,parseInt($("#tCount").value)||6)), size=Math.max(1,Math.min(8,parseInt($("#tSize").value)||4));
-    control={...(control||{state:"lobby",sessionId:rid(),startedAt:null}),teams:list,teamCount:n,teamSize:size};
+    control={...(control||{state:"closed",sessionId:rid(),startedAt:null}),teams:list,teamCount:n,teamSize:size};
     Store.set("control/session",control);
-    if(control.state==="lobby" && sessionPlayers().length) shuffleAll();
+    if((control.state==="lobby"||control.state==="closed") && sessionPlayers().length) shuffleAll();
     renderMentor(); const m=$("#teamsMsg"); if(m) m.textContent="انحفظ."; });
   on("#shuffleBtn",()=>{ shuffleAll(); renderMentor(); });
   on("#copyRes",async()=>{ const txt=resultsTSV(ps); let ok=false;
@@ -933,12 +934,13 @@ function renderMentor(){
     const box=$("#copyBox"); if(ok){ $("#copyRes").textContent="انتسخت! الصقوها بـ Excel أو Sheets"; }
     else { box.value=txt; box.classList.remove("hidden"); box.focus(); box.select(); $("#copyRes").textContent="انسخوا من المربع (Ctrl+C)"; } });
   const sid=()=>control?control.sessionId:rid();
+  const O=$("#mOpen"); if(O) O.addEventListener("click",()=>Store.set("control/session",{...control,state:"lobby"}));
   const S=$("#mStart"); if(S) S.addEventListener("click",()=>Store.set("control/session",{...(control||{}),state:"running",sessionId:sid(),startedAt:Date.now(),fresh:false}));
   const P=$("#mPause"); if(P) P.addEventListener("click",()=>Store.set("control/session",{...control,state:"paused"}));
   const R=$("#mResume"); if(R) R.addEventListener("click",()=>Store.set("control/session",{...control,state:"running"}));
   $("#mNew").addEventListener("click",async e=>{ const b=e.currentTarget; if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="متأكدين؟ رح تنمسح نتائج كل الطلاب"; return; }
     const keep={teams:teamList(),teamCount:teamCfg().n,teamSize:teamCfg().size};
-    await Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,...keep});
+    await Store.set("control/session",{state:"closed",sessionId:rid(),startedAt:null,fresh:true,...keep});
     await Store.del("control/assign");
     for(const t of players) await Store.del("players/"+t.id);
     for(const id in adjusts) await Store.del("adjust/"+id); });
@@ -952,14 +954,14 @@ function bestCode(ts){ const out={2:[],3:[]}; for(const n of [2,3]){ const xs=ts
 let lastPos={};
 function renderScreen(){
   const app=$("#app"); $("#who").textContent="شاشة العرض";
-  const st=control?control.state:"lobby";
+  const st=control?control.state:"closed";
   const all=playerRows().map(p=>({...p,score:p.score.total}));
   const ts=teamAgg(all).sort((a,b)=>b.avg-a.avg||b.solved[3]-a.solved[3]);
   const best=bestCode(all); const solvedAll=all.filter(t=>t.levels&&t.levels[4]&&t.levels[4].solved).length;
   const prev={}; app.querySelectorAll(".rrow").forEach(r=>prev[r.dataset.id]=r.getBoundingClientRect().top);
   app.innerHTML=`<div class="screen stack">
     <div class="row" style="justify-content:space-between"><h1>لغز اللوحة 3: الروبوت ببايثون</h1>
-      <span class="banner">${{lobby:"استنّوا البداية",running:"اللعبة شغّالة",paused:"واقفة مؤقتًا"}[st]||""}</span></div>
+      <span class="banner">${{closed:"قريبًا",lobby:"سجّلوا أسماءكم",running:"اللعبة شغّالة",paused:"واقفة مؤقتًا"}[st]||""}</span></div>
     <div class="row muted" style="font-size:1.15rem;gap:24px"><span>${all.length} طلاب</span><span>${solvedAll} خلّصوا المتاهة</span>
       <span>أقصر كود، مستوى 2: ${bestTxt(best[2])}</span><span>مستوى 3: ${bestTxt(best[3])}</span></div>
     <p class="muted" style="margin:0">نقاط الفريق = معدل نقاط طلابه. الأرقام الصغيرة: كم واحد بالفريق حل كل مستوى.</p>
