@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>روبوت اللوحة</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Arabic:wght@400;500;700&family=Lalezar&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a two-pane workbench. The board sits on one side, the code on the other; the four levels run as a stamped strip across the top. */
+:root{
+  --bg:#eef3f5; --surface:#ffffff; --ink:#10233f; --muted:#5a6b80; --accent:#0c9a94; --gold:#d99a1c;
+  --wall:#1f3a5f; --line:#d6e0e8; --soft:#e3eef0; --good:#1f9a55; --bad:#d04848; --warn:#d98300;
+  --font-display:"Lalezar","IBM Plex Sans Arabic",system-ui,sans-serif;
+  --font-body:"IBM Plex Sans Arabic","Segoe UI",Tahoma,system-ui,sans-serif;
+  --font-code:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:12px; color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0a141f; --surface:#111f2e; --ink:#e6eef5; --muted:#9db0c3; --accent:#2cc4bc; --gold:#f0b940;
+  --wall:#3b6190; --line:#23384d; --soft:#16293b; --good:#3cc47a; --bad:#ff6b6b; --warn:#ffad33; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0a141f; --surface:#111f2e; --ink:#e6eef5; --muted:#9db0c3; --accent:#2cc4bc; --gold:#f0b940;
+  --wall:#3b6190; --line:#23384d; --soft:#16293b; --good:#3cc47a; --bad:#ff6b6b; --warn:#ffad33; color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.55}
+h1,h2,h3{font-family:var(--font-display);font-weight:400;margin:0;text-wrap:balance;letter-spacing:0}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:.5rem .9rem}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btn-main{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.btn-gold{background:var(--gold);border-color:var(--gold);color:#1b1300;font-weight:700}
+.btn-ghost{background:transparent}
+.btn-bad{border-color:var(--bad);color:var(--bad);background:transparent}
+input,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.55rem .8rem}
+.wrap{max-width:1180px;margin:0 auto;padding:16px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
+.top h1{font-size:1.6rem;color:var(--ink)}
+.top .sp{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;padding:.2rem .7rem;border-radius:99px;background:var(--soft);color:var(--muted);white-space:nowrap}
+.pill.live{color:var(--good)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+.pill:empty{display:none}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.muted{color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.stack{display:grid;gap:12px}
+.center{display:grid;place-items:center;min-height:60vh;text-align:center}
+.hidden{display:none!important}
+/* register */
+.groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.gcard{border:2px solid var(--line);border-radius:var(--r);padding:12px;text-align:center;background:var(--surface);display:grid;gap:4px}
+.gcard .gl{font-family:var(--font-display);font-size:2rem;line-height:1;color:var(--g)}
+.gcard[aria-pressed="true"]{border-color:var(--g);box-shadow:0 0 0 3px color-mix(in srgb,var(--g) 25%,transparent)}
+.gcard.taken{opacity:.5}
+/* play */
+.levels{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.lv{position:relative;text-align:start;display:grid;gap:2px;padding:.55rem .8rem}
+.lv .n{font-family:var(--font-display);font-size:1.15rem}
+.lv .s{font-size:.8rem;color:var(--muted)}
+.lv[aria-current="true"]{border-color:var(--accent);box-shadow:inset 0 -3px 0 var(--accent)}
+.lv .stamp{position:absolute;inset-inline-end:8px;bottom:6px;font-family:var(--font-display);font-size:.85rem;color:var(--good);border:2px solid var(--good);border-radius:6px;padding:0 6px;transform:rotate(-8deg)}
+.lv .stamp.skip{color:var(--muted);border-color:var(--muted)}
+.stamp.pop{animation:stamp .45s ease-out}
+@keyframes stamp{0%{transform:scale(2.2) rotate(-20deg);opacity:0}100%{transform:scale(1) rotate(-8deg);opacity:1}}
+.bench{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:14px;align-items:start}
+@media (max-width:860px){.bench{grid-template-columns:1fr}}
+.boards{display:grid;gap:10px}
+.boards.two{grid-template-columns:1fr 1fr}
+.bwrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:8px}
+.bwrap .cap{font-size:.85rem;color:var(--muted);padding:0 4px 4px}
+svg.board{display:block;width:100%;height:auto;direction:ltr}
+.cell{fill:var(--soft)} .wallc{fill:var(--wall)} .gridl{stroke:var(--line);stroke-width:1}
+.trail{fill:var(--accent);opacity:.35}
+.robot-move{transition:transform var(--step,280ms) ease-in-out}
+.robot-rot{transition:transform var(--step,280ms) ease-in-out}
+.crash{fill:var(--bad);opacity:0}
+.crash.on{animation:flash .6s ease-out}
+@keyframes flash{0%{opacity:.85}100%{opacity:0}}
+.shake{animation:shake .4s}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+.task h2{font-size:1.35rem}
+.need{display:inline-block;font-size:.8rem;padding:.1rem .55rem;border-radius:6px;background:color-mix(in srgb,var(--gold) 22%,transparent);color:var(--ink)}
+.editor{display:grid;grid-template-columns:auto 1fr;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface);direction:ltr}
+.gutter{margin:0;padding:12px 8px;text-align:right;color:var(--muted);background:var(--soft);font:15px/1.6 var(--font-code);user-select:none;min-width:2.6em;overflow:hidden}
+.gutter .err{color:#fff;background:var(--bad);border-radius:4px;padding:0 3px}
+textarea.code{border:0;outline:0;resize:vertical;min-height:300px;padding:12px;font:15px/1.6 var(--font-code);color:var(--ink);background:var(--surface);white-space:pre;overflow:auto;tab-size:4}
+textarea.code:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--accent)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;direction:ltr;justify-content:flex-end}
+.chip{font:14px var(--font-code);padding:.25rem .6rem;background:var(--soft);border-color:transparent}
+.console{border-radius:var(--r);padding:12px 14px;background:var(--soft);min-height:3.2em}
+.console.good{background:color-mix(in srgb,var(--good) 15%,var(--surface));}
+.console.bad{background:color-mix(in srgb,var(--bad) 13%,var(--surface));}
+.console .raw{direction:ltr;text-align:left;font:13px/1.5 var(--font-code);color:var(--muted);margin-top:6px;white-space:pre-wrap}
+.hints{display:grid;gap:8px}
+.hint{border:1px dashed var(--line);border-radius:10px;padding:10px 12px}
+.hint.open{border-style:solid;border-color:var(--gold);background:color-mix(in srgb,var(--gold) 9%,var(--surface))}
+code,.mono{font-family:var(--font-code);direction:ltr;unicode-bidi:isolate}
+.ring{width:54px;height:54px}
+.ring circle{fill:none;stroke-width:6}
+.ring .bgc{stroke:var(--line)} .ring .fg{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .5s linear,stroke .3s}
+.ring.amber .fg{stroke:var(--warn)} .ring.red .fg{stroke:var(--bad)}
+.timebox{display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}
+.score{font-family:var(--font-display);font-size:1.5rem;color:var(--accent);font-variant-numeric:tabular-nums}
+.overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--ink) 55%,transparent);display:grid;place-items:center;z-index:20;padding:16px}
+.overlay .card{max-width:440px;text-align:center;display:grid;gap:12px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:.5rem .5rem;border-bottom:1px solid var(--line);text-align:start;vertical-align:middle}
+th{font-size:.85rem;color:var(--muted);font-weight:500}
+.tscroll{overflow-x:auto}
+.lvdots{display:flex;gap:4px}
+.lvdots span{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:.75rem;background:var(--soft);color:var(--muted)}
+.lvdots span.ok{background:var(--good);color:#fff}
+.lvdots span.sk{background:var(--line);color:var(--muted)}
+.lvdots span.cur{outline:2px solid var(--accent)}
+.gtag{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:8px;color:#fff;font-family:var(--font-display);font-size:1.05rem;background:var(--g)}
+pre.key{direction:ltr;text-align:left;font:13px/1.5 var(--font-code);background:var(--soft);padding:10px;border-radius:8px;margin:0;white-space:pre}
+/* projector */
+.screen{max-width:1100px;margin:0 auto;padding:24px}
+.screen h1{font-size:clamp(2rem,4vw,3.2rem)}
+.rank{display:grid;gap:10px;position:relative}
+.rrow{display:grid;grid-template-columns:56px 1fr auto auto;gap:16px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 18px;font-size:1.4rem}
+.rrow .pos{font-family:var(--font-display);font-size:2rem;color:var(--muted);text-align:center}
+.rrow .nm{display:flex;gap:12px;align-items:center;font-weight:700}
+.rrow .sc{font-family:var(--font-display);font-size:2.2rem;color:var(--accent);min-width:3ch;text-align:end}
+.rrow .lvdots span{width:30px;height:30px;font-size:1rem}
+.banner{font-family:var(--font-display);font-size:1.4rem;padding:.3rem 1rem;border-radius:10px;background:var(--soft)}
+canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:30}
+.foot{display:flex;gap:14px;justify-content:center;padding:18px;font-size:.85rem}
+.foot a{color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/skulpt@1.2.0/dist/skulpt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/skulpt@1.2.0/dist/skulpt-stdlib.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1>روبوت اللوحة</h1>
+  <span class="pill" id="who"></span>
+  <span class="sp"></span>
+  <span class="pill" id="net"><span class="dot"></span><span id="netT">بيتصل…</span></span>
+  <button class="btn-ghost" id="soundBtn" aria-pressed="true" title="الصوت">صوت: شغّال</button>
+</header>
+<main id="app"></main>
+<nav class="foot" id="foot"><a href="#team">شاشة الطالب</a><a href="#mentor">لوحة المرشد</a><a href="#screen">شاشة العرض</a></nav>
+<canvas id="fx"></canvas>
+<script>
+"use strict";
+/* ---------------- data ---------------- */
+const BOARDS = {"A":{"L1":["#.#..#","..#...",".##.*#","#.#.#.","....#.","E.#..."],"L2":["S.#..#",".#.##.",".####*",".##.#.","..###.","......"],"L3":["##.###","####*.",".##..#",".#..##","#..###","E.##.."],"L4":[[".####.","#.....","#.###.","..###*","#.##.#","#...W."],["##.#.#","#...*.","#.####","..##S#","#.##..","#....#"]],"turn":"right","best":{"L1":11,"L2":8,"L3":7}},"B":{"L1":["S..##.","..#...","#..##.",".#.*.#","#.#.#.","#...#."],"L2":["E.....","#.##.#","##.#..","#.##..","###..#","*....#"],"L3":["E.#.##","...#.#","##..#.",".##..#","#.##*#","######"],"L4":[[".##...","##..#.","###*#.",".####.","#E....","###..#"],["#.##.#",".###*.","##S##.",".#.##.","##.##.",".#...."]],"turn":"left","best":{"L1":11,"L2":8,"L3":7}},"C":{"L1":["#.#.##",".##.##","...#..","*.#..#",".....#","##...N"],"L2":["S#.*#.",".##.#.",".##..#",".##...","..#.##","....##"],"L3":["##.#.#","###.*.","##..##","#..###","..#.##","E#.##."],"L4":[[".....#","..##.#","..##..","N###.#","#*...#","##..##"],[".#.#.#","*#.###",".#E..#",".#.#.#",".###.#",".....#"]],"turn":"right","best":{"L1":11,"L2":8,"L3":7}},"D":{"L1":[".#.#.W","#.....","*...##","..####","##.##.","#....."],"L2":["S####.","..##*.","..#..#",".###..",".###..",".....#"],"L3":["E###..","..####","#..##.","##..#.",".##.*#","#.####"],"L4":[["*....#","#.#.##","###.##","S#..##","....#.","#####."],["##..##","#....W","..####","#..#*#","..##.#","#....#"]],"turn":"left","best":{"L1":11,"L2":8,"L3":7}},"E":{"L1":["##...#",".....#",".###.*","#.#..#","......","N##.#."],"L2":["##E...","#.#.#.","##.##.","##..#.","##..#.","*....."],"L3":[".#####","#*.##.","##..##","###..#","####..","...#.N"],"L4":[["...###",".#.##.",".#*###","..####","...W##","...###"],["##.###","#.*#.#","#.#E.#","..##..","#....#","#####."]],"turn":"right","best":{"L1":11,"L2":8,"L3":7}},"F":{"L1":["E...#.","...##.","....#.","#.#.*.","#.#.##","....#."],"L2":["E.....","#####.","##..#.","####..","...#..","##*..."],"L3":["#.##.S","####..",".##..#","##..##","#*.#..",".#####"],"L4":[[".....#","*###.#","#..#.#","#E...#","#.####","###.#."],["#....#","..##..","#.*#.#","###E.#","###.##","#.###."]],"turn":"left","best":{"L1":11,"L2":8,"L3":7}},"G":{"L1":["####..",".....#","####..",".#...#",".*.#..","#.#..W"],"L2":["E.....","##.##.","####..",".##...","#*....","###..#"],"L3":["#.####","#*.###","##..#.",".##..#","..##..","##.##W"],"L4":[["###E..","##.#..","##*.#.","##..#.","##....","####.#"],["##....","#...#*","##.#S#","#..#.#","##...#",".#.###"]],"turn":"right","best":{"L1":11,"L2":8,"L3":7}},"H":{"L1":["#..#.S",".*#..#","#.....","#.#.#.",".#....","#..#.#"],"L2":["S##..*",".#.##.",".###..",".##.#.","......","####.."],"L3":["###.#W","#.##..","..#..#","##..##","#*.##.","##.###"],"L4":[["#S#*..","#..#.#","#.##..","#.##.#","#....#","##.##."],[".....#","..#.##",".##.#.",".##N.#","..*###","####.#"]],"turn":"left","best":{"L1":11,"L2":8,"L3":7}}};
+const KEY_B64 = "eyJBIjogeyJMMSI6ICJmb3J3YXJkKClcbmxlZnQoKVxuZm9yd2FyZCgpXG5yaWdodCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpIiwgIkwyIjogImZvciBpIGluIHJhbmdlKDUpOlxuICAgIGZvcndhcmQoKVxubGVmdCgpXG5mb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKClcbmxlZnQoKVxuZm9yIGkgaW4gcmFuZ2UoMyk6XG4gICAgZm9yd2FyZCgpIiwgIkwzIjogImRlZiBzdGFpcigpOlxuICAgIGZvcndhcmQoKVxuICAgIGxlZnQoKVxuICAgIGZvcndhcmQoKVxuICAgIHJpZ2h0KClcblxuZm9yIGkgaW4gcmFuZ2UoNCk6XG4gICAgc3RhaXIoKSIsICJMNCI6ICJmb3Igc3RlcCBpbiByYW5nZSgzMCk6XG4gICAgaWYgd2FsbF9haGVhZCgpOlxuICAgICAgICByaWdodCgpXG4gICAgZWxzZTpcbiAgICAgICAgZm9yd2FyZCgpIn0sICJCIjogeyJMMSI6ICJmb3J3YXJkKClcbmxlZnQoKVxuZm9yd2FyZCgpXG5yaWdodCgpXG5mb3J3YXJkKClcbmxlZnQoKVxuZm9yd2FyZCgpXG5yaWdodCgpXG5mb3J3YXJkKClcbmxlZnQoKVxuZm9yd2FyZCgpIiwgIkwyIjogImZvciBpIGluIHJhbmdlKDQpOlxuICAgIGZvcndhcmQoKVxucmlnaHQoKVxuZm9yIGkgaW4gcmFuZ2UoNSk6XG4gICAgZm9yd2FyZCgpXG5yaWdodCgpXG5mb3IgaSBpbiByYW5nZSg0KTpcbiAgICBmb3J3YXJkKCkiLCAiTDMiOiAiZGVmIHN0YWlyKCk6XG4gICAgZm9yd2FyZCgpXG4gICAgcmlnaHQoKVxuICAgIGZvcndhcmQoKVxuICAgIGxlZnQoKVxuXG5mb3IgaSBpbiByYW5nZSg0KTpcbiAgICBzdGFpcigpIiwgIkw0IjogImZvciBzdGVwIGluIHJhbmdlKDMwKTpcbiAgICBpZiB3YWxsX2FoZWFkKCk6XG4gICAgICAgIGxlZnQoKVxuICAgIGVsc2U6XG4gICAgICAgIGZvcndhcmQoKSJ9LCAiQyI6IHsiTDEiOiAibGVmdCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxuZm9yd2FyZCgpXG5yaWdodCgpXG5mb3J3YXJkKClcbmxlZnQoKVxuZm9yd2FyZCgpXG5mb3J3YXJkKClcbnJpZ2h0KClcbmZvcndhcmQoKSIsICJMMiI6ICJmb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKClcbmxlZnQoKVxuZm9yIGkgaW4gcmFuZ2UoMyk6XG4gICAgZm9yd2FyZCgpXG5sZWZ0KClcbmZvciBpIGluIHJhbmdlKDUpOlxuICAgIGZvcndhcmQoKSIsICJMMyI6ICJkZWYgc3RhaXIoKTpcbiAgICBsZWZ0KClcbiAgICBmb3J3YXJkKClcbiAgICByaWdodCgpXG4gICAgZm9yd2FyZCgpXG5cbmZvciBpIGluIHJhbmdlKDQpOlxuICAgIHN0YWlyKCkiLCAiTDQiOiAiZm9yIHN0ZXAgaW4gcmFuZ2UoMzApOlxuICAgIGlmIHdhbGxfYWhlYWQoKTpcbiAgICAgICAgcmlnaHQoKVxuICAgIGVsc2U6XG4gICAgICAgIGZvcndhcmQoKSJ9LCAiRCI6IHsiTDEiOiAiZm9yd2FyZCgpXG5sZWZ0KClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKClcbnJpZ2h0KClcbmZvcndhcmQoKSIsICJMMiI6ICJmb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKClcbmxlZnQoKVxuZm9yIGkgaW4gcmFuZ2UoNCk6XG4gICAgZm9yd2FyZCgpXG5sZWZ0KClcbmZvciBpIGluIHJhbmdlKDQpOlxuICAgIGZvcndhcmQoKSIsICJMMyI6ICJkZWYgc3RhaXIoKTpcbiAgICByaWdodCgpXG4gICAgZm9yd2FyZCgpXG4gICAgbGVmdCgpXG4gICAgZm9yd2FyZCgpXG5cbmZvciBpIGluIHJhbmdlKDQpOlxuICAgIHN0YWlyKCkiLCAiTDQiOiAiZm9yIHN0ZXAgaW4gcmFuZ2UoMzApOlxuICAgIGlmIHdhbGxfYWhlYWQoKTpcbiAgICAgICAgbGVmdCgpXG4gICAgZWxzZTpcbiAgICAgICAgZm9yd2FyZCgpIn0sICJFIjogeyJMMSI6ICJmb3J3YXJkKClcbnJpZ2h0KClcbmZvcndhcmQoKVxuZm9yd2FyZCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpIiwgIkwyIjogImZvciBpIGluIHJhbmdlKDMpOlxuICAgIGZvcndhcmQoKVxucmlnaHQoKVxuZm9yIGkgaW4gcmFuZ2UoNSk6XG4gICAgZm9yd2FyZCgpXG5yaWdodCgpXG5mb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKCkiLCAiTDMiOiAiZGVmIHN0YWlyKCk6XG4gICAgZm9yd2FyZCgpXG4gICAgbGVmdCgpXG4gICAgZm9yd2FyZCgpXG4gICAgcmlnaHQoKVxuXG5mb3IgaSBpbiByYW5nZSg0KTpcbiAgICBzdGFpcigpIiwgIkw0IjogImZvciBzdGVwIGluIHJhbmdlKDMwKTpcbiAgICBpZiB3YWxsX2FoZWFkKCk6XG4gICAgICAgIHJpZ2h0KClcbiAgICBlbHNlOlxuICAgICAgICBmb3J3YXJkKCkifSwgIkYiOiB7IkwxIjogImZvcndhcmQoKVxuZm9yd2FyZCgpXG5yaWdodCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKClcbnJpZ2h0KClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKCkiLCAiTDIiOiAiZm9yIGkgaW4gcmFuZ2UoNSk6XG4gICAgZm9yd2FyZCgpXG5yaWdodCgpXG5mb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKClcbnJpZ2h0KClcbmZvciBpIGluIHJhbmdlKDMpOlxuICAgIGZvcndhcmQoKSIsICJMMyI6ICJkZWYgc3RhaXIoKTpcbiAgICBmb3J3YXJkKClcbiAgICByaWdodCgpXG4gICAgZm9yd2FyZCgpXG4gICAgbGVmdCgpXG5cbmZvciBpIGluIHJhbmdlKDQpOlxuICAgIHN0YWlyKCkiLCAiTDQiOiAiZm9yIHN0ZXAgaW4gcmFuZ2UoMzApOlxuICAgIGlmIHdhbGxfYWhlYWQoKTpcbiAgICAgICAgbGVmdCgpXG4gICAgZWxzZTpcbiAgICAgICAgZm9yd2FyZCgpIn0sICJHIjogeyJMMSI6ICJmb3J3YXJkKClcbnJpZ2h0KClcbmZvcndhcmQoKVxuZm9yd2FyZCgpXG5sZWZ0KClcbmZvcndhcmQoKVxuZm9yd2FyZCgpXG5sZWZ0KClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpIiwgIkwyIjogImZvciBpIGluIHJhbmdlKDUpOlxuICAgIGZvcndhcmQoKVxucmlnaHQoKVxuZm9yIGkgaW4gcmFuZ2UoNCk6XG4gICAgZm9yd2FyZCgpXG5yaWdodCgpXG5mb3IgaSBpbiByYW5nZSg0KTpcbiAgICBmb3J3YXJkKCkiLCAiTDMiOiAiZGVmIHN0YWlyKCk6XG4gICAgcmlnaHQoKVxuICAgIGZvcndhcmQoKVxuICAgIGxlZnQoKVxuICAgIGZvcndhcmQoKVxuXG5mb3IgaSBpbiByYW5nZSg0KTpcbiAgICBzdGFpcigpIiwgIkw0IjogImZvciBzdGVwIGluIHJhbmdlKDMwKTpcbiAgICBpZiB3YWxsX2FoZWFkKCk6XG4gICAgICAgIHJpZ2h0KClcbiAgICBlbHNlOlxuICAgICAgICBmb3J3YXJkKCkifSwgIkgiOiB7IkwxIjogInJpZ2h0KClcbmZvcndhcmQoKVxubGVmdCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpXG5mb3J3YXJkKClcbmZvcndhcmQoKVxucmlnaHQoKVxuZm9yd2FyZCgpIiwgIkwyIjogImZvciBpIGluIHJhbmdlKDQpOlxuICAgIGZvcndhcmQoKVxubGVmdCgpXG5mb3IgaSBpbiByYW5nZSg1KTpcbiAgICBmb3J3YXJkKClcbmxlZnQoKVxuZm9yIGkgaW4gcmFuZ2UoNCk6XG4gICAgZm9yd2FyZCgpIiwgIkwzIjogImRlZiBzdGFpcigpOlxuICAgIGxlZnQoKVxuICAgIGZvcndhcmQoKVxuICAgIHJpZ2h0KClcbiAgICBmb3J3YXJkKClcblxuZm9yIGkgaW4gcmFuZ2UoNCk6XG4gICAgc3RhaXIoKSIsICJMNCI6ICJmb3Igc3RlcCBpbiByYW5nZSgzMCk6XG4gICAgaWYgd2FsbF9haGVhZCgpOlxuICAgICAgICBsZWZ0KClcbiAgICBlbHNlOlxuICAgICAgICBmb3J3YXJkKCkifX0=";
+const PIN = "2468";
+const GROUPS = [
+  {id:"A",label:"أ",color:"#0c9a94"},{id:"B",label:"ب",color:"#e0603f"},{id:"C",label:"ج",color:"#c98a00"},{id:"D",label:"د",color:"#7a5af0"},
+  {id:"E",label:"هـ",color:"#2e9a3f"},{id:"F",label:"و",color:"#2f6fd6"},{id:"G",label:"ز",color:"#d0417f"},{id:"H",label:"ح",color:"#8a6a3a"}];
+const GMAP = Object.fromEntries(GROUPS.map(g=>[g.id,g]));
+const LEVELS = [
+  {n:1,key:"L1",name:"ترجمة",mins:7,need:null,
+   task:"وصّلوا الروبوت للنجمة بأوامر ورا بعض.",
+   starter:"# كل أمر بسطر\n",
+   chips:["forward()","left()","right()"],
+   hints:["عدّوا الخانات قبل كل لفّة. كل `forward()` بتمشي خانة وحدة.","ابدأوا بأول كم أمر وشغّلوا. شوفوا وين وقف الروبوت، وكمّلوا من هناك."]},
+  {n:2,key:"L2",name:"اختصار",mins:8,need:"for",
+   task:"الطريق فيه خطوات بتتكرر. اختصروا الكود بـ `for`. كل ما قلّت الأسطر أحسن.",
+   starter:"# اختصروا بـ for\n",
+   chips:["forward()","left()","right()","for i in range(3):"],
+   hints:["دوّروا على أمر بيتكرر ورا بعض كثير مرات، زي `forward()`.","الشكل: `for i in range(5):` وتحته الأمر بـ 4 مسافات. الرقم = كم مرة."]},
+  {n:3,key:"L3",name:"دالة",mins:10,need:"def",
+   task:"اللوحة فيها درج. عرّفوا دالة بـ `def` لدرجة وحدة، واستدعوها بالتكرار.",
+   starter:"# عرّفوا دالة بـ def واستدعوها\n",
+   chips:["forward()","left()","right()","def stair():","stair()","for i in range(4):"],
+   hints:["كل درجة فيها نفس الأوامر الأربعة. لاقوها: هدول جسم الدالة.","اكتبوا `def stair():` وتحته أوامر درجة وحدة بـ 4 مسافات. بعدين `for i in range(4):` وتحته `stair()`"]},
+  {n:4,key:"L4",name:"متاهة",mins:10,need:"if",
+   task:"لوحتين مختلفتين. نفس الكود لازم يوصّل الروبوت للنجمة بالاثنتين. بدكم `if` و `wall_ahead()`.",
+   starter:"# نفس الكود لازم يشتغل على اللوحتين\nfor step in range(30):\n    ",
+   chips:["forward()","left()","right()","if wall_ahead():","else:"],
+   hints:["الروبوت بيقدر يسأل حاله بكل خطوة: في حيط قدّامي؟ `wall_ahead()` بتجاوب `True` أو `False`.","جوّا التكرار: `if wall_ahead():` لفّة، و `else:` بعدها `forward()`. أي لفّة؟ جرّبوا الاثنتين."]}];
+const COST = {hint:[1,3], exit:3, verbal:2, bonus:5, solve:10, retry:3};
+const DISCUSS = "ليش كود مستوى 4 اشتغل على لوحتين، وكود مستوى 1 بيشتغل على لوحة وحدة بس؟";
+
+/* ---------------- tiny helpers ---------------- */
+const $ = (s,el=document)=>el.querySelector(s);
+const esc = s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtT = s=>esc(s).replace(/`([^`]+)`/g,(_,c)=>"<code>"+c+"</code>");
+const rid = ()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+const LS = {get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+            set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},
+            del(k){try{localStorage.removeItem(k)}catch(e){}}};
+const fmt = ms=>{ms=Math.max(0,Math.round(ms/1000));return Math.floor(ms/60)+":"+String(ms%60).padStart(2,"0")};
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------------- store: Supabase (no student accounts), Claude db, or local ---------------- */
+// Fill these two after creating the Supabase project (Project Settings → API). The anon/publishable key is public by design.
+const SUPABASE_URL = "PASTE_SUPABASE_URL_HERE";
+const SUPABASE_KEY = "PASTE_SUPABASE_ANON_KEY_HERE";
+const TABLE = "rb_docs";
+const Store = {
+  mode:"init", db:null, sb:null, chains:{}, listeners:[], cache:new Map(),
+  async init(){
+    const hasSupa = /^https:\/\//.test(SUPABASE_URL) && SUPABASE_KEY.length>20 && window.supabase && window.supabase.createClient;
+    if(hasSupa){
+      try{
+        this.sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:false}, realtime:{params:{eventsPerSecond:20}}});
+        this.mode="supa"; await this.supaLoad(true); this.supaLive(); setNet(); return;
+      }catch(e){ console.warn("supabase",e); this.sb=null; }
+    }
+    let db=null;
+    try{ if(window.claude && typeof window.claude.use==="function"){
+      db = await Promise.race([window.claude.use("db"), new Promise(r=>setTimeout(()=>r(null),10000))]); } }catch(e){ db=null; }
+    if(db){ this.db=db; this.mode="db"; } else this.goLocal();
+    setNet();
+  },
+  /* --- Supabase: one table of JSON docs, cached here, kept fresh by Realtime plus a slow re-read --- */
+  async supaLoad(first){
+    const {data,error}=await this.sb.from(TABLE).select("path,data");
+    if(error){ console.warn(error); netState="slow"; setNet(); if(first) throw error; return; }
+    const seen=new Set(), changed=new Set();
+    for(const row of data||[]){ seen.add(row.path); const old=this.cache.get(row.path); const s=JSON.stringify(row.data);
+      if(!old || JSON.stringify(old)!==s){ this.cache.set(row.path,row.data); changed.add(row.path); } }
+    for(const p of [...this.cache.keys()]) if(!seen.has(p) && !this.pending(p)){ this.cache.delete(p); changed.add(p); }
+    changed.forEach(p=>this.emit(p));
+  },
+  pending(p){ return !!this.chains[p+":busy"]; },
+  supaLive(){
+    let t=setTimeout(()=>{ if(netState!=="live"){ netState="slow"; setNet(); } },10000);
+    this.sb.channel("rb-all").on("postgres_changes",{event:"*",schema:"public",table:TABLE},pl=>{
+      if(pl.eventType==="DELETE"){ const p=pl.old&&pl.old.path; if(p){ this.cache.delete(p); this.emit(p); } }
+      else if(pl.new&&pl.new.path){ this.cache.set(pl.new.path,pl.new.data); this.emit(pl.new.path); }
+    }).subscribe(st=>{ if(st==="SUBSCRIBED"){ clearTimeout(t); netState="live"; setNet(); } else if(st==="CHANNEL_ERROR"||st==="TIMED_OUT"){ netState="slow"; setNet(); } });
+    setInterval(()=>this.supaLoad(false).catch(()=>{}), 15000); // safety net if websockets are blocked
+  },
+  goLocal(){
+    this.mode="local"; this.db=null;
+    window.addEventListener("storage",e=>{ if(e.key && e.key.startsWith("rb5db:")) this.emit(e.key.slice(6)); });
+    setNet();
+  },
+  lget(path){ return LS.get("rb5db:"+path,null); },
+  emit(path){ for(const l of this.listeners){ if(l.doc? l.path===path : path.startsWith(l.path+"/") && path.split("/").length===l.path.split("/").length+1) l.fire(); } },
+  readColl(coll){
+    const out=[]; const pre=coll+"/";
+    if(this.mode==="supa"){ for(const [k,v] of this.cache){ if(k.startsWith(pre) && !k.slice(pre.length).includes("/")) out.push({id:k.slice(pre.length),data:v}); } }
+    else { try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k.startsWith("rb5db:"+pre)){ const id=k.slice(("rb5db:"+pre).length); if(!id.includes("/")) out.push({id,data:LS.get(k,null)}); } } }catch(e){} }
+    return out.sort((a,b)=>a.id<b.id?-1:1);
+  },
+  async get(path){
+    if(this.mode==="supa") return this.cache.has(path)? this.cache.get(path) : null;
+    if(this.mode==="db"){ try{ const s=await this.db.doc(path).get(); return s.exists? s.data(): null; }catch(e){ this.fail(e); return this.lget(path);} }
+    return this.lget(path);
+  },
+  set(path,data){
+    const body=JSON.parse(JSON.stringify(data));
+    if(this.mode==="supa"){
+      this.cache.set(path,body); this.emit(path);
+      const coll=path.split("/").slice(0,-1).join("/");
+      this.chains[path+":busy"]=(this.chains[path+":busy"]||0)+1;
+      const p=(this.chains[path]||Promise.resolve()).then(async()=>{
+        const {error}=await this.sb.from(TABLE).upsert({path,coll,data:body,updated_at:new Date().toISOString()},{onConflict:"path"});
+        if(error){ console.warn(error); netState="bad"; setNet(); }
+      }).catch(e=>console.warn(e)).finally(()=>{ this.chains[path+":busy"]--; if(!this.chains[path+":busy"]) delete this.chains[path+":busy"]; });
+      this.chains[path]=p; return p;
+    }
+    if(this.mode!=="db"){ LS.set("rb5db:"+path,body); this.emit(path); return Promise.resolve(); }
+    const p=(this.chains[path]||Promise.resolve()).then(()=>this.db.doc(path).set(body)).catch(e=>this.fail(e));
+    this.chains[path]=p; return p;
+  },
+  del(path){
+    if(this.mode==="supa"){
+      this.cache.delete(path); this.emit(path);
+      const p=(this.chains[path]||Promise.resolve()).then(async()=>{ const {error}=await this.sb.from(TABLE).delete().eq("path",path); if(error) console.warn(error); }).catch(e=>console.warn(e));
+      this.chains[path]=p; return p;
+    }
+    if(this.mode!=="db"){ LS.del("rb5db:"+path); this.emit(path); return Promise.resolve(); }
+    const p=(this.chains[path]||Promise.resolve()).then(()=>this.db.doc(path).delete()).catch(e=>this.fail(e));
+    this.chains[path]=p; return p;
+  },
+  fail(e){ console.warn("db",e); if(e && (e.code==="invalid_argument"||e.code==="revoked"||e.code==="not_granted"||e.code==="capability_disabled")){ netState="bad"; setNet(); } },
+  watchDoc(path,cb){
+    if(this.mode==="db"){
+      let t=setTimeout(()=>{netState="slow";setNet();},10000);
+      return this.db.doc(path).onSnapshot(s=>{ if(!s.metadata.fromCache){clearTimeout(t); if(netState!=="bad"){netState="live";setNet();}} cb(s.exists?s.data():null); },
+                                          e=>{clearTimeout(t); this.fail(e);});
+    }
+    const read=()=> this.mode==="supa"? (this.cache.has(path)?this.cache.get(path):null) : this.lget(path);
+    const l={doc:true,path,fire:()=>cb(read())}; this.listeners.push(l); setTimeout(l.fire,0);
+    return ()=>{ this.listeners=this.listeners.filter(x=>x!==l); };
+  },
+  watchColl(coll,cb){
+    if(this.mode==="db"){
+      let t=setTimeout(()=>{netState="slow";setNet();},10000);
+      return this.db.collection(coll).onSnapshot(s=>{ if(!s.metadata.fromCache){clearTimeout(t); if(netState!=="bad"){netState="live";setNet();}} cb(s.docs.map(d=>({id:d.id,data:d.data()}))); },
+                                                 e=>{clearTimeout(t); this.fail(e);});
+    }
+    const l={doc:false,path:coll,fire:()=>cb(this.readColl(coll))}; this.listeners.push(l); setTimeout(l.fire,0);
+    return ()=>{ this.listeners=this.listeners.filter(x=>x!==l); };
+  }
+};
+let netState="init";
+function setNet(){
+  const el=$("#net"), t=$("#netT"); if(!el) return;
+  el.className="pill";
+  if(Store.mode==="local"){ el.classList.add("warn"); t.textContent="وضع جهاز واحد"; }
+  else if(netState==="bad"){ el.classList.add("bad"); t.textContent="ما في صلاحية كتابة"; }
+  else if(netState==="slow"){ el.classList.add("warn"); t.textContent="الاتصال بطيء"; }
+  else if(netState==="live"){ el.classList.add("live"); t.textContent="متصل"; }
+  else t.textContent="بيتصل…";
+}
+
+/* ---------------- sound + confetti ---------------- */
+let soundOn = LS.get("rb5:sound",true), actx=null;
+function beep(kind){
+  if(!soundOn) return;
+  try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; }
+  const seq = {ok:[523,659,784,1047], bad:[330,247], step:[880], click:[660]}[kind]||[660];
+  seq.forEach((f,i)=>{ const o=actx.createOscillator(), g=actx.createGain(); o.type= kind==="bad"?"sawtooth":"triangle"; o.frequency.value=f;
+    const t=actx.currentTime+i*0.09; g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(kind==="step"?0.03:0.12,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.16);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.18); });
+}
+function confetti(){
+  if(reduced) return;
+  const c=$("#fx"), x=c.getContext("2d"); c.width=innerWidth; c.height=innerHeight;
+  const cols=[getComputedStyle(document.documentElement).getPropertyValue("--accent"),getComputedStyle(document.documentElement).getPropertyValue("--gold"),"#e0603f","#2f6fd6"];
+  const ps=Array.from({length:90},()=>({x:innerWidth/2,y:innerHeight/3,vx:(Math.random()-.5)*12,vy:Math.random()*-10-3,s:4+Math.random()*5,c:cols[Math.random()*4|0],r:Math.random()*6}));
+  let f=0; (function tick(){ x.clearRect(0,0,c.width,c.height); ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.35;p.r+=.2; x.save();x.translate(p.x,p.y);x.rotate(p.r);x.fillStyle=p.c;x.fillRect(-p.s/2,-p.s/2,p.s,p.s*.6);x.restore();});
+    if(++f<90) requestAnimationFrame(tick); else x.clearRect(0,0,c.width,c.height); })();
+}
+$("#soundBtn").addEventListener("click",()=>{ soundOn=!soundOn; LS.set("rb5:sound",soundOn); paintSound(); beep("click"); });
+function paintSound(){ const b=$("#soundBtn"); b.setAttribute("aria-pressed",String(soundOn)); b.textContent= soundOn?"صوت: شغّال":"صوت: مسكّر"; }
+paintSound();
+
+/* ---------------- board model ---------------- */
+const DIRS=[[-1,0],[0,1],[1,0],[0,-1]], DN="NESW";
+function parseBoard(rows){
+  const walls=new Set(); let start=null, star=null;
+  rows.forEach((row,r)=>[...row].forEach((ch,c)=>{ if(ch==="#") walls.add(r+","+c); else if(ch==="*") star=[r,c]; else if(DN.includes(ch)) start=[r,c,DN.indexOf(ch)]; }));
+  return {rows,walls,start,star,n:rows.length};
+}
+function boardsFor(group,lv){ const g=BOARDS[group]; const L=LEVELS[lv-1].key; return (lv===4? g.L4 : [g[L]]).map(parseBoard); }
+
+/* ---------------- SVG board ---------------- */
+const CS=52;
+function robotSVG(color){
+  return `<g class="robot-move"><g class="robot-rot">
+    <rect x="-17" y="-15" width="34" height="32" rx="9" fill="${color}" stroke="var(--surface)" stroke-width="2"/>
+    <circle cx="-7" cy="-2" r="4" fill="#fff"/><circle cx="7" cy="-2" r="4" fill="#fff"/>
+    <circle cx="-7" cy="-3" r="2" fill="#10233f"/><circle cx="7" cy="-3" r="2" fill="#10233f"/>
+    <path d="M0 -27 L9 -16 L-9 -16 Z" fill="${color}"/>
+    <rect x="-9" y="8" width="18" height="3" rx="1.5" fill="#fff" opacity=".8"/>
+  </g></g>`;
+}
+function starPath(cx,cy,R){ let d=""; for(let i=0;i<10;i++){ const rr=i%2?R*0.45:R, a=-Math.PI/2+i*Math.PI/5; d+=(i?"L":"M")+(cx+rr*Math.cos(a)).toFixed(1)+" "+(cy+rr*Math.sin(a)).toFixed(1); } return d+"Z"; }
+function drawBoard(el,b,color,label){
+  const n=b.n, W=n*CS; let s=`<svg class="board" viewBox="-2 -2 ${W+4} ${W+4}" role="img" aria-label="${esc(label||"لوحة")}">`;
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++){
+    const w=b.walls.has(r+","+c);
+    s+=`<rect class="${w?"wallc":"cell"}" x="${c*CS+2}" y="${r*CS+2}" width="${CS-4}" height="${CS-4}" rx="${w?6:8}"/>`;
+  }
+  s+=`<g class="trails"></g>`;
+  s+=`<rect class="crash" x="0" y="0" width="${CS-4}" height="${CS-4}" rx="6"/>`;
+  s+=`<path d="${starPath(b.star[1]*CS+CS/2,b.star[0]*CS+CS/2,17)}" fill="var(--gold)" stroke="var(--surface)" stroke-width="2"/>`;
+  s+=robotSVG(color)+`</svg>`;
+  el.innerHTML=s;
+  const v={el,b,svg:el.firstElementChild,move:el.querySelector(".robot-move"),rot:el.querySelector(".robot-rot"),trails:el.querySelector(".trails"),crash:el.querySelector(".crash"),angle:0};
+  resetView(v); return v;
+}
+function placeRobot(v,r,c,instant){
+  if(instant){ v.move.style.transition="none"; v.rot.style.transition="none"; }
+  v.move.style.transform=`translate(${c*CS+CS/2}px,${r*CS+CS/2}px)`;
+  v.rot.style.transform=`rotate(${v.angle}deg)`;
+  if(instant){ v.move.getBoundingClientRect(); v.move.style.transition=""; v.rot.style.transition=""; }
+}
+function resetView(v){ const [r,c,d]=v.b.start; v.angle=d*90; v.trails.innerHTML=""; placeRobot(v,r,c,true); v.pos=[r,c]; }
+function addTrail(v,r,c){ const ns="http://www.w3.org/2000/svg", e=document.createElementNS(ns,"circle"); e.setAttribute("class","trail"); e.setAttribute("cx",c*CS+CS/2); e.setAttribute("cy",r*CS+CS/2); e.setAttribute("r",5); v.trails.appendChild(e); }
+
+/* ---------------- python runner (Skulpt) ---------------- */
+const MAX_STEPS=200;
+function skulptReady(){ return typeof window.Sk!=="undefined" && Sk.misceval; }
+function runOnBoard(code,b){
+  const sim={r:b.start[0],c:b.start[1],d:b.start[2],steps:0,done:false,status:null};
+  const actions=[]; let output="";
+  const blocked=(r,c)=> r<0||c<0||r>=b.n||c>=b.n||b.walls.has(r+","+c);
+  const stop=st=>{ sim.status=st; throw new Sk.builtin.RuntimeError("__robot_stop__"); };
+  const tick=()=>{ sim.steps++; if(sim.steps>MAX_STEPS) stop("toomany"); };
+  const noArgs=(name,args)=>{ if(args.length) throw new Sk.builtin.TypeError(name+"() takes no arguments"); };
+  Sk.builtins.forward=new Sk.builtin.func(function(){ noArgs("forward",arguments); if(sim.done) return Sk.builtin.none.none$; tick();
+    const [dr,dc]=DIRS[sim.d], r=sim.r+dr, c=sim.c+dc;
+    if(blocked(r,c)){ actions.push({t:"X",r,c}); stop("crash"); }
+    sim.r=r; sim.c=c; actions.push({t:"F",r,c}); if(r===b.star[0]&&c===b.star[1]) sim.done=true; return Sk.builtin.none.none$; });
+  Sk.builtins.left=new Sk.builtin.func(function(){ noArgs("left",arguments); if(sim.done) return Sk.builtin.none.none$; tick(); sim.d=(sim.d+3)%4; actions.push({t:"L"}); return Sk.builtin.none.none$; });
+  Sk.builtins.right=new Sk.builtin.func(function(){ noArgs("right",arguments); if(sim.done) return Sk.builtin.none.none$; tick(); sim.d=(sim.d+1)%4; actions.push({t:"R"}); return Sk.builtin.none.none$; });
+  Sk.builtins.wall_ahead=new Sk.builtin.func(function(){ noArgs("wall_ahead",arguments); const [dr,dc]=DIRS[sim.d]; return blocked(sim.r+dr,sim.c+dc)?Sk.builtin.bool.true$:Sk.builtin.bool.false$; });
+  Sk.configure({output:t=>{ if(output.length<4000) output+=t; }, read:f=>{ if(Sk.builtinFiles && Sk.builtinFiles.files[f]!==undefined) return Sk.builtinFiles.files[f]; throw "File not found: '"+f+"'"; }, __future__:Sk.python3, execLimit:4000});
+  return Sk.misceval.asyncToPromise(()=>Sk.importMainWithBody("<stdin>",false,code,true))
+    .then(()=>({status: sim.done?"star":"notstar", actions, output, steps:sim.steps}),
+          err=>{ if(sim.status) return {status:sim.status, actions, output, steps:sim.steps}; return {status:"error", err:parseErr(err), actions, output, steps:sim.steps}; });
+}
+function parseErr(e){
+  let name="Error", msg="", line=null;
+  try{ name=e.tp$name || (e.constructor&&e.constructor.name) || "Error"; }catch(_){}
+  try{ msg=e.args.v.map(x=>x.v!==undefined?x.v:String(x)).join(" "); }catch(_){ msg=String(e); }
+  try{ line=e.traceback && e.traceback[0] && e.traceback[0].lineno; }catch(_){}
+  return {name,msg,line,raw:(name+": "+msg+(line?" (line "+line+")":""))};
+}
+const CMDS=["forward","left","right","wall_ahead"];
+function lev(a,b){ const m=[...Array(a.length+1)].map((_,i)=>[i]); for(let j=1;j<=b.length;j++) m[0][j]=j;
+  for(let i=1;i<=a.length;i++) for(let j=1;j<=b.length;j++) m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1)); return m[a.length][b.length]; }
+function explain(err,code){
+  const lines=code.split("\n"), L=err.line||1, cur=(lines[L-1]||""), prev=(lines[L-2]||"");
+  const ind=s=>s.match(/^\s*/)[0].replace(/\t/g,"    ").length;
+  const at=" بسطر "+L+".";
+  if(err.name==="SyntaxError"||err.name==="IndentationError"||err.name==="TabError"){
+    for(const s of [cur,prev]){ if(/^\s*(if|elif|while)\b[^#]*[^=!<>]=[^=]/.test(s)) return "بالشرط استعملوا `==` مش `=` (SyntaxError)"+at; }
+    for(const [s,ln] of [[cur,L],[prev,L-1]]){ const t=s.replace(/#.*$/,"").trim(); if(/^(for|if|elif|else|def|while)\b/.test(t) && !t.endsWith(":")) return "ناقص `:` بآخر السطر "+ln+" (SyntaxError)."; }
+    const p=prev.replace(/#.*$/,"").trim();
+    if(p.endsWith(":") && ind(cur)<=ind(prev)) return "السطر "+L+" لازم يبلّش بـ 4 مسافات، لأنه تحت سطر فيه `:` (IndentationError).";
+    if(L>1 && !p.endsWith(":") && ind(cur)>ind(prev) && cur.trim()) return "في مسافات زيادة بأول السطر "+L+" (IndentationError).";
+    return "غلطة كتابة (SyntaxError)"+at+" افحصوا الأقواس `()` والنقطتين `:` وعلامات الاقتباس.";
+  }
+  if(err.name==="NameError"){
+    const m=/name '([^']+)'/.exec(err.msg), nm=m?m[1]:"";
+    const near=CMDS.find(c=>lev(c,nm)<=2);
+    if(near) return "الاسم `"+nm+"` مش معروف"+at+" قصدكم `"+near+"()`؟ (NameError)";
+    return "الاسم `"+nm+"` مش معروف هون"+at+" يمكن غلطة إملاء، أو متغير انعمل جوّا دالة وبتستعملوه برّاها (المدى، Scope).";
+  }
+  if(err.name==="UnboundLocalError") return "الدالة بتحاول تغيّر متغير من برّاها"+at+" خلّوا الدالة تاخذه كمعامل وترجّعه بـ `return` (المدى، Scope).";
+  if(err.name==="TypeError"){
+    if(/takes no arguments/.test(err.msg)) return "الأوامر بدون أرقام جوّا القوسين، زي `forward()`"+at+" للتكرار استعملوا `for`.";
+    if(/not callable/.test(err.msg)) return "في إشي انستدعى كأنه دالة وهو مش دالة"+at+" (TypeError)";
+    return "نوع غلط (TypeError)"+at;
+  }
+  if(err.name==="TimeLimitError") return "الكود طوّل كثير. يمكن في تكرار ما بيخلص؟";
+  if(err.name==="ImportError") return "ما بنحتاج `import` بهاي الفعالية.";
+  if(err.name==="ZeroDivisionError") return "قسمة على صفر"+at;
+  return "في خطأ ("+err.name+")"+at;
+}
+function stripComments(code){ return code.split("\n").map(l=>l.replace(/#.*$/,"")).join("\n"); }
+function countLines(code){ return stripComments(code).split("\n").filter(l=>l.trim()).length; }
+function needMet(lv,code){
+  const c=stripComments(code);
+  if(lv===2) return /\bfor\b[^\n]*:/.test(c) ? null : "الروبوت وصل! بس هاد المستوى بده `for`. اختصروا الأوامر اللي بتتكرر.";
+  if(lv===3){ const m=/\bdef\s+([A-Za-z_]\w*)\s*\(/.exec(c);
+    if(!m) return "الروبوت وصل! بس هاد المستوى بده دالة بـ `def`. عرّفوا دالة لدرجة وحدة.";
+    const calls=(c.match(new RegExp("\\b"+m[1]+"\\s*\\(","g"))||[]).length;
+    return calls>=2 ? null : "عرّفتوا الدالة `"+m[1]+"`، بس ما استدعيتوها. استدعوها بالتكرار."; }
+  if(lv===4) return (/\bif\b/.test(c) && /wall_ahead\s*\(/.test(c)) ? null : "هاد المستوى بده `if` مع `wall_ahead()`.";
+  return null;
+}
+
+/* ---------------- scoring (always derived) ---------------- */
+function scoreOf(t,adj){
+  const items=[]; adj=adj||{};
+  if(!t) return {total:0,items};
+  for(const L of LEVELS){
+    const s=(t.levels||{})[L.n]||{};
+    if(s.solved){ items.push(["حل مستوى "+L.n, COST.solve]); if(s.fails>0) items.push(["مستوى "+L.n+": نجحتوا بعد غلط", COST.retry]); }
+    const h=s.hints||0; if(h>=1) items.push(["تلميح 1، مستوى "+L.n, -COST.hint[0]]); if(h>=2) items.push(["تلميح 2، مستوى "+L.n, -COST.hint[1]]);
+  }
+  const ex=Math.max(0,(t.exits||0)-(adj.refunds||0)); if(ex) items.push(["خروج من التطبيق ×"+ex, -COST.exit*ex]);
+  if(adj.verbal) items.push(["تلميح شفهي ×"+adj.verbal, -COST.verbal*adj.verbal]);
+  if(adj.bonus) items.push(["بونص المرشد ×"+adj.bonus, COST.bonus*adj.bonus]);
+  return {total:items.reduce((a,b)=>a+b[1],0), items};
+}
+
+/* ---------------- shared state ---------------- */
+let controlLoaded=false, control=null, players=[], adjusts={};
+const subs={};
+function subControl(){ if(subs.control) return; subs.control=Store.watchDoc("control/session",d=>{ controlLoaded=true; control=d; onShared(); }); }
+function subPlayers(){ if(subs.players) return; subs.players=Store.watchColl("players",a=>{ players=a; onShared(); }); }
+function subAdjust(){ if(subs.adjust) return; subs.adjust=Store.watchColl("adjust",a=>{ adjusts=Object.fromEntries(a.map(x=>[x.id,x.data])); onShared(); }); }
+function onShared(){ if(view==="team") teamShared(); else if(view==="mentor") renderMentor(); else if(view==="screen") renderScreen(); }
+function sessionPlayers(){ return control? players.filter(t=>t.data && t.data.sessionId===control.sessionId) : []; }
+const normTeam = t=>String(t||"").replace(/\s+/g," ").trim();
+function teamList(){ return (control&&Array.isArray(control.teams))? control.teams.map(normTeam).filter(Boolean) : []; }
+
+/* ================= STUDENT VIEW ================= */
+let me=null, ui={}, running=false, stopFlag=false;
+function freshMe(){ return {teamId:rid(), name:"", team:"", group:null, sessionId:null, level:1, levels:{}, exits:0, done:false}; }
+function lvState(n){ me.levels[n]=me.levels[n]||{elapsed:0,runs:0,fails:0,hints:0,solved:false,skipped:false,lines:null,code:null,solvedAt:null}; return me.levels[n]; }
+function saveMe(){ LS.set("rb5:me",me); }
+function pushTeam(){
+  if(!me||!me.sessionId) return;
+  const lv={}; for(const k in me.levels){ const s=me.levels[k]; lv[k]={runs:s.runs,fails:s.fails,hints:s.hints,solved:s.solved,skipped:s.skipped,lines:s.lines,
+    time:Math.round((s.solved&&s.solvedAt!=null?s.solvedAt:s.elapsed)/1000),code:s.solved?(s.solvedCode||""):""}; }
+  Store.set("players/"+me.teamId,{name:me.name,team:me.team,group:me.group,sessionId:me.sessionId,level:me.level,levels:lv,exits:me.exits,done:me.done,updatedAt:Date.now()});
+}
+function teamShared(){
+  if(!me) return;
+  if(control && me.sessionId && control.sessionId!==me.sessionId){ me=freshMe(); saveMe(); ui.mode=null; }
+  renderTeam();
+}
+function renderTeam(){
+  const app=$("#app");
+  $("#who").textContent = me && me.name ? (me.name+" · "+me.team+" · لوحات "+(GMAP[me.group]||{}).label) : "";
+  let mode;
+  if(!me.sessionId) mode="register";
+  else if(me.done) mode="done";
+  else if(!control || control.state==="lobby") mode="lobby";
+  else mode="play";
+  if(mode!=="play"){ ui.mode=mode; }
+  if(mode==="register") return renderRegister(app);
+  if(mode==="lobby") return renderLobby(app);
+  if(mode==="done") return renderDone(app);
+  if(ui.mode!=="play"){ ui.mode="play"; buildPlay(app); } else updatePlay();
+}
+function pickGroup(team){
+  const ps=sessionPlayers(), counts={}; GROUPS.forEach(g=>counts[g.id]=0);
+  ps.forEach(p=>{ if(counts[p.data.group]!=null) counts[p.data.group]++; });
+  const mates=new Set(ps.filter(p=>normTeam(p.data.team).toLowerCase()===team.toLowerCase()).map(p=>p.data.group));
+  let c=GROUPS.map(g=>g.id).filter(id=>!mates.has(id)); if(!c.length) c=GROUPS.map(g=>g.id);
+  const min=Math.min(...c.map(id=>counts[id])); c=c.filter(id=>counts[id]===min);
+  return c[Math.floor(Math.random()*c.length)];
+}
+function renderRegister(app){
+  const live=control && control.sessionId, list=teamList();
+  const known=[...new Set(sessionPlayers().map(p=>normTeam(p.data.team)).filter(Boolean))];
+  const nm=ui.nameDraft||"", tm=ui.teamDraft||"", fid=document.activeElement&&document.activeElement.id;
+  app.innerHTML=`<div class="wrap"><div class="card stack" style="max-width:560px;margin:24px auto">
+      <h2>سجّلوا أسماءكم</h2>
+      <p class="muted" style="margin:0">كل واحد بيشتغل على جهازه وبكوده. الصفحة بتعطي كل واحد لوحات خاصة فيه.</p>
+      <label for="pName">الاسم</label>
+      <input id="pName" maxlength="30" value="${esc(nm)}" placeholder="الاسم واسم العائلة" autocomplete="off">
+      <label for="pTeam">الفريق</label>
+      ${list.length? `<select id="pTeam"><option value="">اختاروا الفريق</option>${list.map(t=>`<option ${t===tm?"selected":""}>${esc(t)}</option>`).join("")}</select>`
+        : `<input id="pTeam" maxlength="24" list="teamList" value="${esc(tm)}" placeholder="اسم الفريق" autocomplete="off"><datalist id="teamList">${known.map(t=>`<option value="${esc(t)}"></option>`).join("")}</datalist>`}
+      <div class="row"><button class="btn-main" id="regBtn">ادخلوا</button>
+        <span class="muted" id="regMsg">${live?"":"المرشد لسا ما فتح الجلسة. استنّوا شوي."}</span></div>
+    </div></div>`;
+  const nI=$("#pName"), tI=$("#pTeam"), btn=$("#regBtn");
+  const ok=()=>{ btn.disabled=!(live && nI.value.trim() && normTeam(tI.value)); };
+  nI.addEventListener("input",()=>{ ui.nameDraft=nI.value; ok(); });
+  tI.addEventListener(list.length?"change":"input",()=>{ ui.teamDraft=tI.value; ok(); });
+  ok();
+  if(fid==="pName"||fid==="pTeam"){ const f=$("#"+fid); f.focus(); if(f.setSelectionRange&&f.tagName==="INPUT") f.setSelectionRange(f.value.length,f.value.length); }
+  btn.addEventListener("click",()=>{
+    if(!(control&&control.sessionId)) return;
+    let team=normTeam(tI.value).slice(0,24); const same=known.find(k=>k.toLowerCase()===team.toLowerCase()); if(same) team=same;
+    me.name=nI.value.trim().slice(0,30); me.team=team; me.group=pickGroup(team); me.sessionId=control.sessionId; me.level=1; lvState(1);
+    saveMe(); pushTeam(); beep("ok"); renderTeam();
+  });
+}
+function renderLobby(app){
+  const g=GMAP[me.group];
+  app.innerHTML=`<div class="wrap center"><div class="card stack" style="max-width:520px">
+    <span class="gtag" style="--g:${g.color};margin:auto;width:56px;height:56px;font-size:2rem">${g.label}</span>
+    <h2>أهلا ${esc(me.name)}</h2>
+    <p class="muted" style="margin:0">فريق ${esc(me.team)} · لوحاتك: مجموعة ${g.label}. استنّوا المرشد يبلّش اللعبة للكل مع بعض.</p>
+    <div class="muted">فيها 4 مستويات: ترجمة، اختصار بـ <code>for</code>، دالة بـ <code>def</code>، ومتاهة بـ <code>if</code>.</div>
+    <div class="muted" style="font-size:.9rem">كل واحد بيكتب كوده لحاله. بتقدروا تتناقشوا مع فريقكم، بس بدون نسخ: كل واحد إله لوحات مختلفة.</div></div></div>`;
+}
+function renderDone(app){
+  const adj=adjusts[me.teamId]; const sc=scoreOf(me,adj);
+  app.innerHTML=`<div class="wrap center"><div class="card stack" style="max-width:560px;text-align:start">
+    <h2>خلّصتوا! النتيجة: <span class="score">${sc.total}</span></h2>
+    <table><tbody>${sc.items.map(i=>`<tr><td>${esc(i[0])}</td><td style="text-align:end" class="mono">${i[1]>0?"+":""}${i[1]}</td></tr>`).join("")||`<tr><td class="muted">ما في نقاط لسا</td></tr>`}</tbody></table>
+    <p class="muted" style="margin:0">نتيجتكم بتدخل بمعدل فريق ${esc(me.team)}.</p>
+    <div class="hint open"><strong>سؤال للنقاش:</strong> ${esc(DISCUSS)}</div>
+    <p class="muted" style="margin:0">ارجعوا لأي مستوى وجرّبوا تقصّروا الكود أكثر. ما في نقاط زيادة، بس في تحدي. وساعدوا حدا من فريقكم بالشرح، مش بالكود.</p>
+    <div class="row">${LEVELS.map(L=>`<button data-back="${L.n}">مستوى ${L.n}</button>`).join("")}</div>
+  </div></div>`;
+  app.querySelectorAll("[data-back]").forEach(b=>b.addEventListener("click",()=>{ me.done=false; me.review=true; me.level=+b.dataset.back; saveMe(); ui.mode=null; renderTeam(); }));
+}
+
+function buildPlay(app){
+  const g=GMAP[me.group];
+  app.innerHTML=`<div class="wrap stack">
+    <div class="row" style="justify-content:space-between">
+      <div class="row"><span class="gtag" style="--g:${g.color}" title="لوحاتكم">${g.label}</span><strong>${esc(me.name)}</strong><span class="muted">${esc(me.team)}</span></div>
+      <div class="row">${me.review?`<button id="backDone">النتيجة</button>`:""}<span class="muted">النقاط</span><span class="score" id="scoreV">0</span></div>
+    </div>
+    <nav class="levels" id="lvTabs" aria-label="المستويات"></nav>
+    <div class="bench">
+      <section class="stack">
+        <div class="boards" id="boards"></div>
+        <div class="row"><label for="speed" class="muted">السرعة</label>
+          <select id="speed"><option value="520">بطيء</option><option value="300" selected>عادي</option><option value="120">سريع</option></select>
+          <button id="resetBtn" class="btn-ghost">رجّعوا الروبوت</button></div>
+      </section>
+      <section class="stack">
+        <div class="card task stack" id="taskCard"></div>
+        <div class="chips" id="chips"></div>
+        <div class="editor"><pre class="gutter" id="gutter" aria-hidden="true">1</pre>
+          <textarea class="code" id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="الكود"></textarea></div>
+        <div class="row"><button class="btn-main" id="runBtn">▶ شغّلوا</button><button id="stopBtn" class="hidden">وقّفوا</button>
+          <span class="muted" id="linesV"></span><span class="sp" style="flex:1"></span>
+          <button id="skipBtn" class="btn-ghost hidden">تخطّوا للمستوى الجاي</button></div>
+        <div class="console" id="out" aria-live="polite"><span class="muted">اكتبوا الكود وكبسوا «شغّلوا».</span></div>
+        <div class="hints" id="hints"></div>
+      </section>
+    </div></div>
+    <div class="overlay hidden" id="pauseOv"><div class="card"><h2>المرشد وقّف اللعبة</h2><p class="muted" style="margin:0">استنّوا شوي. الوقت واقف.</p></div></div>
+    <div class="overlay hidden" id="exitOv"><div class="card"><h2>طلعتوا من التطبيق</h2><p style="margin:0">الخروج بيخصم ${COST.exit} نقاط. المرشد بيقدر يلغي الخصم.</p><button class="btn-main" id="exitOk">رجعنا</button></div></div>`;
+  ui.code=$("#code"); ui.gutter=$("#gutter");
+  ui.code.addEventListener("input",()=>{ lvState(me.level).code=ui.code.value; saveMeSoon(); paintGutter(); });
+  ui.code.addEventListener("scroll",()=>{ ui.gutter.scrollTop=ui.code.scrollTop; });
+  ui.code.addEventListener("keydown",editorKeys);
+  $("#runBtn").addEventListener("click",runCode);
+  $("#stopBtn").addEventListener("click",()=>{ stopFlag=true; });
+  $("#resetBtn").addEventListener("click",()=>{ if(!running) ui.views.forEach(resetView); });
+  $("#skipBtn").addEventListener("click",skipLevel);
+  $("#exitOk").addEventListener("click",()=>$("#exitOv").classList.add("hidden"));
+  const bd=$("#backDone"); if(bd) bd.addEventListener("click",()=>{ me.done=true; me.review=false; saveMe(); ui.mode=null; renderTeam(); });
+  loadLevel();
+}
+let saveT=null; function saveMeSoon(){ clearTimeout(saveT); saveT=setTimeout(saveMe,400); }
+function maxUnlocked(){ let m=1; for(const L of LEVELS){ const s=me.levels[L.n]; if(s&&(s.solved||s.skipped)) m=Math.max(m,L.n+1); } return Math.min(m,4); }
+function loadLevel(){
+  const L=LEVELS[me.level-1], s=lvState(me.level), g=GMAP[me.group];
+  const bs=boardsFor(me.group,me.level);
+  $("#boards").className="boards"+(bs.length>1?" two":"");
+  $("#boards").innerHTML=bs.map((_,i)=>`<div class="bwrap">${bs.length>1?`<div class="cap">لوحة ${i+1}</div>`:""}<div class="bslot"></div></div>`).join("");
+  ui.views=bs.map((b,i)=>drawBoard($("#boards").querySelectorAll(".bslot")[i],b,g.color,"لوحة مستوى "+L.n+(bs.length>1?" رقم "+(i+1):"")));
+  $("#taskCard").innerHTML=`<div class="row" style="justify-content:space-between"><h2>مستوى ${L.n}: ${L.name}</h2>
+      <div class="timebox"><svg class="ring" id="ring" viewBox="0 0 54 54"><circle class="bgc" cx="27" cy="27" r="22"/><circle class="fg" cx="27" cy="27" r="22" stroke-dasharray="138.2" stroke-dashoffset="0" transform="rotate(-90 27 27)"/></svg><span id="timeV" class="mono">0:00</span></div></div>
+    <p style="margin:0">${fmtT(L.task)}</p>
+    ${L.need?`<div><span class="need">لازم: <code>${L.need}</code></span></div>`:""}
+    <div class="muted" style="font-size:.9rem">الأوامر: <code>forward()</code> خانة لقدّام · <code>left()</code> لفّة شمال · <code>right()</code> لفّة يمين${me.level===4?" · <code>wall_ahead()</code> في حيط قدّام؟":""}. الروبوت بيوقف لحاله لما يوصل النجمة.</div>`;
+  $("#chips").innerHTML=L.chips.map(c=>`<button class="chip" data-ins="${esc(c)}">${esc(c)}</button>`).join("");
+  $("#chips").querySelectorAll(".chip").forEach(b=>b.addEventListener("click",()=>insertSnippet(b.dataset.ins)));
+  if(s.code==null) s.code=L.starter;
+  ui.code.value=s.code; paintGutter();
+  setOut(s.solved?`<strong>حلّيتوا هاد المستوى.</strong> ${s.lines?("الكود كان "+s.lines+" أسطر."):""}`:`<span class="muted">اكتبوا الكود وكبسوا «شغّلوا».</span>`, s.solved?"good":"");
+  updatePlay(true);
+}
+function paintGutter(errLine){
+  const n=Math.max(1,ui.code.value.split("\n").length);
+  ui.gutter.innerHTML=Array.from({length:n},(_,i)=> (i+1)===errLine?`<span class="err">${i+1}</span>`:String(i+1)).join("\n");
+  ui.gutter.scrollTop=ui.code.scrollTop;
+  $("#linesV").textContent="عدد الأسطر: "+countLines(ui.code.value);
+}
+function insertSnippet(txt){
+  const ta=ui.code, s=ta.selectionStart, e=ta.selectionEnd, v=ta.value;
+  const lineStart=v.lastIndexOf("\n",s-1)+1, before=v.slice(lineStart,s);
+  const indent=(before.match(/^\s*/)||[""])[0];
+  let ins=txt;
+  if(before.trim()!==""){ ins="\n"+indent+txt; }
+  if(txt.endsWith(":")) ins+="\n"+indent+"    "; else ins+="\n"+indent;
+  ta.value=v.slice(0,s)+ins+v.slice(e); const p=s+ins.length; ta.focus(); ta.setSelectionRange(p,p);
+  ta.dispatchEvent(new Event("input"));
+}
+function editorKeys(ev){
+  const ta=ev.target, s=ta.selectionStart, e=ta.selectionEnd, v=ta.value;
+  if(ev.key==="Tab"){
+    ev.preventDefault(); const ls=v.lastIndexOf("\n",s-1)+1;
+    if(ev.shiftKey){ const m=v.slice(ls).match(/^ {1,4}/); if(m){ ta.value=v.slice(0,ls)+v.slice(ls+m[0].length); ta.setSelectionRange(Math.max(ls,s-m[0].length),Math.max(ls,e-m[0].length)); } }
+    else { ta.value=v.slice(0,s)+"    "+v.slice(e); ta.setSelectionRange(s+4,s+4); }
+    ta.dispatchEvent(new Event("input"));
+  } else if(ev.key==="Enter"){
+    ev.preventDefault(); const ls=v.lastIndexOf("\n",s-1)+1, line=v.slice(ls,s);
+    let ind=(line.match(/^\s*/)||[""])[0]; if(line.replace(/#.*$/,"").trim().endsWith(":")) ind+="    ";
+    const ins="\n"+ind; ta.value=v.slice(0,s)+ins+v.slice(e); ta.setSelectionRange(s+ins.length,s+ins.length);
+    ta.dispatchEvent(new Event("input"));
+  } else if((ev.ctrlKey||ev.metaKey) && ev.key==="Enter"){ runCode(); }
+}
+function setOut(html,cls){ const o=$("#out"); o.className="console"+(cls?" "+cls:""); o.innerHTML=html; }
+function updatePlay(force){
+  if(ui.mode!=="play") return;
+  const L=LEVELS[me.level-1], s=lvState(me.level);
+  // tabs
+  const mu=maxUnlocked();
+  $("#lvTabs").innerHTML=LEVELS.map(x=>{ const st=me.levels[x.n]||{}; const locked=x.n>mu;
+    return `<button class="lv" data-lv="${x.n}" ${locked?"disabled":""} aria-current="${x.n===me.level}">
+      <span class="n">${x.n}. ${x.name}</span><span class="s">${locked?"مقفول":(st.solved?(st.lines+" أسطر"):(st.skipped?"تخطّيتوه":(x.need?("بده "+x.need):"أوامر ورا بعض")))}</span>
+      ${st.solved?`<span class="stamp ${ui.popLv===x.n?"pop":""}">تم</span>`:(st.skipped?`<span class="stamp skip">تخطّي</span>`:"")}</button>`; }).join("");
+  ui.popLv=null;
+  $("#lvTabs").querySelectorAll(".lv").forEach(b=>b.addEventListener("click",()=>{ if(running) return; me.level=+b.dataset.lv; saveMe(); loadLevel(); }));
+  // score
+  $("#scoreV").textContent=scoreOf(me,adjusts[me.teamId]).total;
+  // timer
+  paintTimer();
+  // hints
+  paintHints();
+  // overlays
+  $("#pauseOv").classList.toggle("hidden", !(control&&control.state==="paused"));
+}
+function paintTimer(){
+  const L=LEVELS[me.level-1], s=lvState(me.level), lim=L.mins*60000, el=s.elapsed;
+  const ring=$("#ring"); if(!ring) return;
+  const frac=Math.min(1,el/lim), fg=ring.querySelector(".fg");
+  fg.setAttribute("stroke-dashoffset",(138.2*frac).toFixed(1));
+  ring.classList.toggle("amber",frac>=0.7&&frac<1); ring.classList.toggle("red",frac>=1);
+  $("#timeV").textContent= el<lim ? fmt(lim-el) : "+"+fmt(el-lim);
+  const sb=$("#skipBtn"), showSkip=el>=lim && !s.solved && !s.skipped && !me.review;
+  sb.classList.toggle("hidden",!showSkip);
+  if(showSkip && sb.dataset.confirm!=="1") sb.textContent= me.level===4?"خلّصوا اللعبة":"تخطّوا للمستوى الجاي";
+}
+function hintOpenable(i){ const L=LEVELS[me.level-1], s=lvState(me.level), lim=L.mins*60000;
+  const timeOk = s.elapsed >= lim*(i===0?0.4:0.7); const failOk = s.fails>=3*(i+1); return timeOk||failOk; }
+function paintHints(){
+  const L=LEVELS[me.level-1], s=lvState(me.level), box=$("#hints"); if(!box) return;
+  const sig=me.level+":"+s.hints+":"+hintOpenable(0)+":"+hintOpenable(1);
+  if(box.dataset.sig===sig) return; box.dataset.sig=sig;
+  box.innerHTML=L.hints.map((h,i)=>{
+    if(i<s.hints) return `<div class="hint open"><strong>تلميح ${i+1}:</strong> ${fmtT(h)}</div>`;
+    if(i>s.hints) return `<div class="hint muted">تلميح ${i+1} (−${COST.hint[i]})</div>`;
+    const ok=hintOpenable(i);
+    return `<div class="hint row" style="justify-content:space-between"><span class="muted">تلميح ${i+1} (−${COST.hint[i]} ${i?"نقاط":"نقطة"})${ok?"":" · بيفتح بعد شوي"}</span>
+      <button data-hint="${i}" ${ok?"":"disabled"}>افتحوا التلميح</button></div>`; }).join("");
+  const b=box.querySelector("[data-hint]");
+  if(b) b.addEventListener("click",()=>{
+    if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="متأكدين؟ اكبسوا كمان مرة"; return; }
+    lvState(me.level).hints++; saveMe(); pushTeam(); beep("click"); box.dataset.sig=""; updatePlay(); });
+}
+function skipLevel(){
+  const b=$("#skipBtn"); if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="متأكدين؟ ما في نقاط لهاد المستوى"; return; }
+  b.dataset.confirm=""; const s=lvState(me.level); s.skipped=true;
+  if(me.level<4){ me.level++; lvState(me.level); } else { me.done=true; }
+  saveMe(); pushTeam(); ui.mode=null; renderTeam();
+}
+async function runCode(){
+  if(running) return;
+  if(control&&control.state==="paused") return;
+  if(!skulptReady()){ setOut("بايثون لسا بتتحمّل. استنّوا ثانية وجرّبوا كمان مرة.","bad"); return; }
+  const lvN=me.level, L=LEVELS[lvN-1], s=lvState(lvN), code=ui.code.value;
+  s.code=code; saveMe(); paintGutter();
+  running=true; stopFlag=false; $("#runBtn").disabled=true; $("#stopBtn").classList.remove("hidden");
+  setOut(`<span class="muted">الروبوت بيشتغل…</span>`);
+  const results=[];
+  for(const v of ui.views){ resetView(v); }
+  for(const v of ui.views){ results.push(await runOnBoard(code,v.b)); }
+  const errR=results.find(r=>r.status==="error");
+  if(!errR){ for(let i=0;i<ui.views.length;i++){ await animate(ui.views[i],results[i]); if(stopFlag) break; } }
+  running=false; $("#runBtn").disabled=false; $("#stopBtn").classList.add("hidden");
+  if(stopFlag){ setOut("وقّفتوا الروبوت."); return; }
+  const wasSolved=s.solved; s.runs++;
+  const allStar=results.every(r=>r.status==="star");
+  const outTxt=results.map(r=>r.output).join("").trim();
+  const printed= outTxt? `<div class="raw">${esc(outTxt.slice(0,600))}</div>`:"";
+  if(errR){
+    const msg=explain(errR.err,code); if(!wasSolved) s.fails++; paintGutter(errR.err.line);
+    setOut(`<strong>${fmtT(msg)}</strong><div class="raw">${esc(errR.err.raw)}</div>${printed}`,"bad"); beep("bad"); shake();
+  } else if(allStar){
+    const miss=needMet(lvN,code);
+    if(miss){ setOut(`<strong>${fmtT(miss)}</strong>${printed}`,""); beep("click"); }
+    else if(wasSolved){ const n=countLines(code); if(!s.lines || n<s.lines){ s.lines=n; s.solvedCode=code; } setOut(`<strong>وصل كمان مرة!</strong> ${n} أسطر.${printed}`,"good"); beep("ok"); }
+    else {
+      s.solved=true; s.solvedAt=s.elapsed; s.lines=countLines(code); s.solvedCode=code; ui.popLv=lvN;
+      const extra=s.fails>0?` و+${COST.retry} لأنكم ما استسلمتوا بعد الغلط`:"";
+      setOut(`<strong>برافو! الروبوت وصل النجمة.</strong> +${COST.solve}${extra}. الكود ${s.lines} أسطر.${printed}`,"good"); beep("ok"); confetti();
+      if(lvN<4){ me.level=lvN+1; lvState(me.level); saveMe(); pushTeam(); setTimeout(()=>{ if(ui.mode==="play"&&!running){ loadLevel(); setOut(`<strong>فتحتوا مستوى ${me.level}!</strong> ${fmtT(LEVELS[me.level-1].task)}`,"good"); } },1400); updatePlay(); return; }
+      else { me.done=true; saveMe(); pushTeam(); setTimeout(()=>{ ui.mode=null; renderTeam(); },1800); updatePlay(); return; }
+    }
+  } else if(lvN===3 && /ما استدعيتوها/.test(needMet(3,code)||"")){
+    setOut(`<strong>${fmtT(needMet(3,code))}</strong>${printed}`,""); beep("click");
+  } else {
+    if(!wasSolved) s.fails++;
+    const bi=results.findIndex(r=>r.status!=="star"), r=results[bi], where=ui.views.length>1?` (لوحة ${bi+1})`:"";
+    let msg = r.status==="crash" ? `الروبوت خبط بالحيط بالخطوة ${r.steps}${where}.` :
+              r.status==="toomany" ? `الروبوت عمل أكثر من ${MAX_STEPS} خطوة${where}. يمكن التكرار كبير كثير؟` :
+              `الروبوت خلّص الأوامر بس ما وصل النجمة${where}.`;
+    if(ui.views.length>1 && results.some(x=>x.status==="star")) msg+=" وصل باللوحة الثانية، بس لازم يوصل بالاثنتين.";
+    setOut(`<strong>${esc(msg)}</strong> صلّحوا وجرّبوا كمان مرة.${printed}`,"bad"); beep("bad");
+  }
+  saveMe(); pushTeam(); updatePlay();
+}
+function shake(){ const e=$(".editor"); e.classList.remove("shake"); void e.offsetWidth; e.classList.add("shake"); }
+function animate(v,res){
+  return new Promise(done=>{
+    const step=+$("#speed").value; v.el.style.setProperty("--step",Math.round(step*0.9)+"ms");
+    let i=0, [r,c]=[v.b.start[0],v.b.start[1]]; addTrail(v,r,c);
+    const next=()=>{
+      if(stopFlag || i>=res.actions.length){ done(); return; }
+      const a=res.actions[i++];
+      if(a.t==="F"){ r=a.r; c=a.c; placeRobot(v,r,c); addTrail(v,r,c); beep("step"); }
+      else if(a.t==="L"){ v.angle-=90; placeRobot(v,r,c); }
+      else if(a.t==="R"){ v.angle+=90; placeRobot(v,r,c); }
+      else if(a.t==="X"){ const ns=v.crash; ns.setAttribute("x",Math.max(-CS,Math.min(v.b.n*CS,a.c*CS))+2); ns.setAttribute("y",Math.max(-CS,Math.min(v.b.n*CS,a.r*CS))+2);
+        ns.classList.remove("on"); void ns.getBoundingClientRect(); ns.classList.add("on"); v.svg.classList.remove("shake"); void v.svg.getBoundingClientRect(); v.svg.classList.add("shake"); }
+      setTimeout(next, reduced? Math.min(step,120) : step);
+    };
+    setTimeout(next,120);
+  });
+}
+/* timers: accumulate active time while the session runs */
+let lastTick=Date.now();
+setInterval(()=>{
+  const now=Date.now(), dt=now-lastTick; lastTick=now;
+  if(view!=="team"||!me||ui.mode!=="play") return;
+  if(!(control&&control.state==="running")) return;
+  const s=lvState(me.level); if(s.solved||s.skipped) { paintTimer(); return; }
+  s.elapsed+=Math.min(dt,5000); saveMeSoon(); paintTimer(); paintHints();
+},500);
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState!=="hidden") return;
+  if(view==="team" && me && ui.mode==="play" && control && control.state==="running" && !me.done && !me.review){
+    me.exits++; saveMe(); pushTeam(); const o=$("#exitOv"); if(o) o.classList.remove("hidden"); updatePlay();
+  }
+});
+
+/* ================= MENTOR VIEW ================= */
+let mentorOk=false; try{ mentorOk=sessionStorage.getItem("rb5:pin")==="1"; }catch(e){}
+let keyData=null, keyGroup="A", mentorOpen={}, teamFilter="";
+function getKey(){ if(!keyData){ try{ keyData=JSON.parse(decodeURIComponent(escape(atob(KEY_B64)))); }catch(e){ keyData={}; } } return keyData; }
+const mins = sec=> sec==null? "" : (Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0"));
+function playerRows(){ return sessionPlayers().map(t=>({id:t.id,...t.data,score:scoreOf(t.data,adjusts[t.id])})); }
+function teamAgg(ps){
+  const by={};
+  for(const p of ps){ const k=normTeam(p.team)||"بدون فريق"; (by[k]=by[k]||{name:k,members:[]}).members.push(p); }
+  return Object.values(by).map(t=>{ const n=t.members.length;
+    const avg=n? t.members.reduce((a,p)=>a+(typeof p.score==="number"?p.score:p.score.total),0)/n : 0;
+    const solved=LEVELS.map(L=>t.members.filter(p=>p.levels&&p.levels[L.n]&&p.levels[L.n].solved).length);
+    return {...t,n,avg:Math.round(avg*10)/10,solved}; });
+}
+function resultsTSV(ps){
+  const head=["الاسم","الفريق","اللوحات"]; LEVELS.forEach(L=>head.push(`م${L.n} حالة`,`م${L.n} دقائق`,`م${L.n} تشغيل`,`م${L.n} غلط`,`م${L.n} تلميحات`,`م${L.n} أسطر`));
+  head.push("خروج","تلميح شفهي","بونص","النقاط");
+  const rows=ps.map(p=>{ const a=adjusts[p.id]||{}; const r=[p.name,p.team,(GMAP[p.group]||{}).label||""];
+    LEVELS.forEach(L=>{ const s=(p.levels||{})[L.n]||{}; r.push(s.solved?"حل":(s.skipped?"تخطّى":(s.runs?"ما خلّص":"ما وصل")), s.time!=null?(s.time/60).toFixed(1):"", s.runs||0, s.fails||0, s.hints||0, s.lines||""); });
+    r.push(Math.max(0,(p.exits||0)-(a.refunds||0)), a.verbal||0, a.bonus||0, p.score.total); return r; });
+  return [head,...rows].map(r=>r.map(x=>String(x).replace(/[\t\n]/g," ")).join("\t")).join("\n");
+}
+function renderMentor(){
+  const app=$("#app"); $("#who").textContent="لوحة المرشد";
+  if(!mentorOk){
+    app.innerHTML=`<div class="wrap center"><form class="card stack" id="pinF" style="max-width:340px"><h2>لوحة المرشد</h2>
+      <label for="pin">الرمز</label><input id="pin" inputmode="numeric" autocomplete="off"><button class="btn-main">ادخلوا</button><span class="muted" id="pinMsg"></span></form></div>`;
+    $("#pinF").addEventListener("submit",e=>{ e.preventDefault(); if($("#pin").value.trim()===PIN){ mentorOk=true; try{sessionStorage.setItem("rb5:pin","1")}catch(_){} renderMentor(); } else $("#pinMsg").textContent="الرمز غلط."; });
+    return;
+  }
+  if(controlLoaded && control===null && !ui.creating){ ui.creating=true; Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:[]}).then(()=>{ui.creating=false;}); }
+  const fid=document.activeElement&&document.activeElement.id;
+  if(fid==="teamsBox") return; // don't wipe a list being typed
+  const st=control?control.state:"lobby";
+  const all=playerRows(), aggs=teamAgg(all).sort((a,b)=>a.name.localeCompare(b.name,"ar"));
+  const ps=all.filter(p=>!teamFilter||normTeam(p.team)===teamFilter).sort((a,b)=>normTeam(a.team).localeCompare(normTeam(b.team),"ar")||b.score.total-a.score.total);
+  const best=bestCode(all); const k=getKey();
+  app.innerHTML=`<div class="wrap stack">
+    <div class="card row" style="justify-content:space-between">
+      <div class="row"><h2>الجلسة</h2><span class="pill ${st==="running"?"live":(st==="paused"?"warn":"")}">${{lobby:"انتظار",running:"شغّالة",paused:"واقفة"}[st]||st}</span><span class="muted">${all.length} طلاب · ${aggs.length} فرق</span></div>
+      <div class="row">
+        ${st==="lobby"?`<button class="btn-main" id="mStart">ابدأوا للكل</button>`:""}
+        ${st==="running"?`<button class="btn-gold" id="mPause">وقّفوا مؤقتًا</button>`:""}
+        ${st==="paused"?`<button class="btn-main" id="mResume">كمّلوا</button>`:""}
+        <button class="btn-bad" id="mNew">جلسة جديدة</button>
+      </div></div>
+    <div class="card stack"><h3>أسماء الفرق</h3>
+      <p class="muted" style="margin:0">اختياري. إذا كتبتوا الأسماء هون، الطلاب بيختاروا من قائمة، وما في غلطات إملاء. كل اسم بسطر.</p>
+      <textarea id="teamsBox" rows="3" style="font:inherit;border:1px solid var(--line);border-radius:10px;padding:.5rem;background:var(--surface);color:var(--ink)">${esc(teamList().join("\n"))}</textarea>
+      <div class="row"><button id="saveTeams">احفظوا القائمة</button><span class="muted" id="teamsMsg"></span></div></div>
+    <div class="card stack"><h3>الفرق</h3><div class="tscroll"><table>
+      <thead><tr><th>الفريق</th><th>طلاب</th><th>حلّوا مستوى 1 / 2 / 3 / 4</th><th>المعدل</th></tr></thead>
+      <tbody>${aggs.map(t=>`<tr><td><button class="btn-ghost" data-tf="${esc(t.name)}" style="padding:.2rem .5rem;${teamFilter===t.name?"border-color:var(--accent)":""}">${esc(t.name)}</button></td><td class="mono">${t.n}</td><td class="mono">${t.solved.join(" / ")}</td><td class="score" style="font-size:1.2rem">${t.avg}</td></tr>`).join("")||`<tr><td colspan="4" class="muted">لسا ما في حدا.</td></tr>`}</tbody></table></div></div>
+    <div class="card stack"><div class="row" style="justify-content:space-between"><h3>الطلاب${teamFilter?" · "+esc(teamFilter):""}</h3>
+        <div class="row">${teamFilter?`<button id="clearTf">كل الفرق</button>`:""}<button class="btn-main" id="copyRes">انسخوا النتائج (Excel)</button></div></div>
+      <textarea id="copyBox" class="hidden" rows="5" readonly style="font:12px var(--font-code);direction:ltr"></textarea>
+      <div class="tscroll"><table>
+      <thead><tr><th>الطالب</th><th>الفريق</th><th>المستويات</th><th>وقت الحل (دقائق)</th><th>تشغيل / غلط</th><th>تلميحات</th><th>خروج</th><th>شفهي</th><th>بونص</th><th>النقاط</th></tr></thead>
+      <tbody>${ps.map(t=>{ const a=adjusts[t.id]||{}; const ex=(t.exits||0)-(a.refunds||0); let runs=0,fails=0,h=0; for(const kk in (t.levels||{})){ runs+=t.levels[kk].runs||0; fails+=t.levels[kk].fails||0; h+=t.levels[kk].hints||0; }
+        const times=LEVELS.map(L=>{ const s=(t.levels||{})[L.n]; return s&&s.solved? mins(s.time) : (s&&s.skipped?"تخطّى":"–"); }).join(" · ");
+        return `<tr><td><div class="row"><span class="gtag" style="--g:${(GMAP[t.group]||{}).color}" title="لوحات">${(GMAP[t.group]||{}).label||"?"}</span><button class="btn-ghost" data-open="${t.id}" style="padding:.2rem .4rem;border:0">${esc(t.name)} ${mentorOpen[t.id]?"▴":"▾"}</button></div></td>
+          <td>${esc(t.team)}</td><td>${lvDots(t)}</td><td style="white-space:nowrap;font-variant-numeric:tabular-nums">${times}</td><td class="mono">${runs} / ${fails}</td><td class="mono">${h}</td>
+          <td class="mono">${ex>0?`${ex} <button data-refund="${t.id}" style="padding:.15rem .5rem">إلغاء خصم</button>`:"0"}</td>
+          <td><button data-verbal="${t.id}" style="padding:.15rem .5rem">+1</button> <span class="mono">${a.verbal||0}</span></td>
+          <td><button data-bonus="${t.id}" style="padding:.15rem .5rem">+5</button> <span class="mono">${a.bonus||0}</span></td>
+          <td class="score" style="font-size:1.2rem">${t.score.total}</td></tr>
+          ${mentorOpen[t.id]?`<tr><td colspan="10"><div class="row" style="align-items:flex-start">${LEVELS.map(L=>{ const s=(t.levels||{})[L.n]; return s&&s.solved?`<div><div class="muted">مستوى ${L.n} (${s.lines} أسطر)</div><pre class="key">${esc(s.code||"")}</pre></div>`:""; }).join("")||`<span class="muted">لسا ما حل ولا مستوى.</span>`}</div></td></tr>`:""}`; }).join("") || `<tr><td colspan="10" class="muted">لسا ما في طلاب مسجّلين.</td></tr>`}</tbody></table></div></div>
+    <div class="card stack"><h3>أقصر كود</h3><p class="muted" style="margin:0">لمستوى 2 و3. اعطوا البونص (+5) بإيدكم.</p>
+      <div class="row">${[2,3].map(n=>`<div><strong>مستوى ${n}:</strong> ${bestTxt(best[n])}</div>`).join("")}</div></div>
+    <div class="card stack"><div class="row" style="justify-content:space-between"><h3>مفتاح الحلول</h3>
+      <div class="row">${GROUPS.map(g=>`<button data-kg="${g.id}" aria-pressed="${keyGroup===g.id}" style="${keyGroup===g.id?"border-color:"+g.color:""}">${g.label}</button>`).join("")}</div></div>
+      <p class="muted" style="margin:0">حلول ممكنة. في كثير حلول صحيحة. مستوى 4 للوحات ${GMAP[keyGroup].label} بيلف ${BOARDS[keyGroup].turn==="right"?"يمين":"شمال"}.</p>
+      <div class="groups" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
+        ${LEVELS.map(L=>`<div class="stack"><strong>مستوى ${L.n}: ${L.name}</strong><div class="boards ${L.n===4?"two":""}" data-kb="${L.n}"></div><pre class="key">${esc((k[keyGroup]||{})[L.key]||"")}</pre></div>`).join("")}
+      </div></div>
+    <div class="card stack"><h3>النقاط</h3><table><tbody>
+      <tr><td>حل مستوى</td><td class="mono">+${COST.solve}</td></tr><tr><td>نجح بعد غلط</td><td class="mono">+${COST.retry}</td></tr>
+      <tr><td>تلميح 1 / تلميح 2</td><td class="mono">−${COST.hint[0]} / −${COST.hint[1]}</td></tr><tr><td>تلميح شفهي</td><td class="mono">−${COST.verbal}</td></tr>
+      <tr><td>خروج من الصفحة</td><td class="mono">−${COST.exit}</td></tr><tr><td>بونص المرشد (مثلًا أقصر كود)</td><td class="mono">+${COST.bonus}</td></tr></tbody></table>
+      <p class="muted" style="margin:0">نقاط الفريق = معدل نقاط طلابه. الرمز: ${PIN}. ${Store.mode==="supa"?"النتائج بتنحفظ بـ Supabase، والطلاب ما بدهم حساب.":"تنبيه: الصفحة مش متصلة بـ Supabase."}</p></div>
+  </div>`;
+  app.querySelectorAll("[data-kb]").forEach(el=>{ const n=+el.dataset.kb; const bs=boardsFor(keyGroup,n); el.innerHTML=bs.map(()=>`<div class="bwrap"><div class="bslot"></div></div>`).join(""); bs.forEach((b,i)=>drawBoard(el.querySelectorAll(".bslot")[i],b,GMAP[keyGroup].color,"مفتاح")); });
+  const on=(sel,fn)=>app.querySelectorAll(sel).forEach(b=>b.addEventListener("click",()=>fn(b)));
+  on("[data-kg]",b=>{ keyGroup=b.dataset.kg; renderMentor(); });
+  on("[data-open]",b=>{ mentorOpen[b.dataset.open]=!mentorOpen[b.dataset.open]; renderMentor(); });
+  on("[data-tf]",b=>{ teamFilter= teamFilter===b.dataset.tf? "" : b.dataset.tf; renderMentor(); });
+  on("#clearTf",()=>{ teamFilter=""; renderMentor(); });
+  on("[data-refund]",b=>adjust(b.dataset.refund,"refunds"));
+  on("[data-verbal]",b=>adjust(b.dataset.verbal,"verbal"));
+  on("[data-bonus]",b=>adjust(b.dataset.bonus,"bonus"));
+  on("#saveTeams",()=>{ const list=[...new Set($("#teamsBox").value.split("\n").map(normTeam).filter(Boolean))].slice(0,30);
+    Store.set("control/session",{...(control||{state:"lobby",sessionId:rid(),startedAt:null}),teams:list}); $("#teamsMsg").textContent="انحفظت."; });
+  on("#copyRes",async()=>{ const txt=resultsTSV(ps); let ok=false;
+    try{ await navigator.clipboard.writeText(txt); ok=true; }catch(e){}
+    const box=$("#copyBox"); if(ok){ $("#copyRes").textContent="انتسخت! الصقوها بـ Excel أو Sheets"; }
+    else { box.value=txt; box.classList.remove("hidden"); box.focus(); box.select(); $("#copyRes").textContent="انسخوا من المربع (Ctrl+C)"; } });
+  const sid=()=>control?control.sessionId:rid();
+  const S=$("#mStart"); if(S) S.addEventListener("click",()=>Store.set("control/session",{...(control||{}),state:"running",sessionId:sid(),startedAt:Date.now(),fresh:false}));
+  const P=$("#mPause"); if(P) P.addEventListener("click",()=>Store.set("control/session",{...control,state:"paused"}));
+  const R=$("#mResume"); if(R) R.addEventListener("click",()=>Store.set("control/session",{...control,state:"running"}));
+  $("#mNew").addEventListener("click",async e=>{ const b=e.currentTarget; if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="متأكدين؟ رح تنمسح نتائج كل الطلاب"; return; }
+    await Store.set("control/session",{state:"lobby",sessionId:rid(),startedAt:null,fresh:true,teams:teamList()});
+    for(const t of players) await Store.del("players/"+t.id);
+    for(const id in adjusts) await Store.del("adjust/"+id); });
+}
+function adjust(id,field){ const a={refunds:0,verbal:0,bonus:0,...(adjusts[id]||{})}; a[field]=(a[field]||0)+1; adjusts[id]=a; Store.set("adjust/"+id,a); renderMentor(); }
+function lvDots(t){ return `<span class="lvdots">${LEVELS.map(L=>{ const s=(t.levels||{})[L.n]||{}; const cls=s.solved?"ok":(s.skipped?"sk":(t.level===L.n&&!t.done?"cur":"")); return `<span class="${cls}" title="مستوى ${L.n}">${s.solved?"✓":L.n}</span>`; }).join("")}</span>`; }
+function bestTxt(arr){ if(!arr.length) return "لسا"; const names=arr.slice(0,3).map(x=>esc(x.name)).join("، "); return names+(arr.length>3?` و${arr.length-3} غيرهم`:"")+` (${arr[0].lines} أسطر)`; }
+function bestCode(ts){ const out={2:[],3:[]}; for(const n of [2,3]){ const xs=ts.filter(t=>t.levels&&t.levels[n]&&t.levels[n].solved&&t.levels[n].lines); if(!xs.length) continue; const m=Math.min(...xs.map(t=>t.levels[n].lines)); out[n]=xs.filter(t=>t.levels[n].lines===m).map(t=>({name:t.name,lines:m})); } return out; }
+
+/* ================= PROJECTOR ================= */
+let lastPos={};
+function renderScreen(){
+  const app=$("#app"); $("#who").textContent="شاشة العرض";
+  const st=control?control.state:"lobby";
+  const all=playerRows().map(p=>({...p,score:p.score.total}));
+  const ts=teamAgg(all).sort((a,b)=>b.avg-a.avg||b.solved[3]-a.solved[3]);
+  const best=bestCode(all); const solvedAll=all.filter(t=>t.levels&&t.levels[4]&&t.levels[4].solved).length;
+  const prev={}; app.querySelectorAll(".rrow").forEach(r=>prev[r.dataset.id]=r.getBoundingClientRect().top);
+  app.innerHTML=`<div class="screen stack">
+    <div class="row" style="justify-content:space-between"><h1>لغز اللوحة 3: الروبوت ببايثون</h1>
+      <span class="banner">${{lobby:"استنّوا البداية",running:"اللعبة شغّالة",paused:"واقفة مؤقتًا"}[st]||""}</span></div>
+    <div class="row muted" style="font-size:1.15rem;gap:24px"><span>${all.length} طلاب</span><span>${solvedAll} خلّصوا المتاهة</span>
+      <span>أقصر كود، مستوى 2: ${bestTxt(best[2])}</span><span>مستوى 3: ${bestTxt(best[3])}</span></div>
+    <p class="muted" style="margin:0">نقاط الفريق = معدل نقاط طلابه. الأرقام الصغيرة: كم واحد بالفريق حل كل مستوى.</p>
+    <div class="rank">${ts.map((t,i)=>`<div class="rrow" data-id="${esc(t.name)}"><span class="pos">${i+1}</span>
+      <span class="nm">${esc(t.name)} <span class="muted" style="font-weight:400;font-size:1rem">${t.n} طلاب</span></span>
+      <span class="lvdots">${t.solved.map((c,j)=>`<span class="${c===t.n&&t.n?"ok":""}" title="مستوى ${j+1}" style="width:auto;padding:0 .5rem">${c}/${t.n}</span>`).join("")}</span>
+      <span class="sc" data-v="${t.avg}">${t.avg}</span></div>`).join("") || `<div class="card muted" style="font-size:1.3rem">الفرق رح تظهر هون لما الطلاب يسجّلوا.</div>`}</div></div>`;
+  if(!reduced) app.querySelectorAll(".rrow").forEach(r=>{ const p=prev[r.dataset.id]; if(p==null) return; const d=p-r.getBoundingClientRect().top; if(!d) return;
+    r.style.transform=`translateY(${d}px)`; r.style.transition="none"; requestAnimationFrame(()=>{ r.style.transition="transform .6s ease"; r.style.transform=""; }); });
+  app.querySelectorAll(".rrow .sc").forEach(el=>{ const id=el.parentElement.dataset.id, to=+el.dataset.v, from=lastPos[id]; lastPos[id]=to;
+    if(from==null||from===to||reduced) return; const t0=performance.now(); (function f(t){ const k=Math.min(1,(t-t0)/600); el.textContent=(Math.round((from+(to-from)*k)*10)/10); if(k<1) requestAnimationFrame(f); })(t0); });
+}
+
+/* ================= ROUTER ================= */
+let view="team";
+function route(){
+  const h=(location.hash||"").replace("#","");
+  view= h==="mentor"?"mentor": h==="screen"?"screen":"team";
+  $("#foot").classList.toggle("hidden", view==="screen");
+  ui.mode=null;
+  if(view==="team"){ me=LS.get("rb5:me",null)||freshMe(); if(!me.teamId) me=freshMe(); renderTeam(); }
+  else if(view==="mentor") renderMentor(); else renderScreen();
+}
+window.addEventListener("hashchange",route);
+(async function boot(){
+  $("#app").innerHTML=`<div class="wrap center"><div class="muted">بيتحمّل…</div></div>`;
+  await Store.init();
+  subControl(); subPlayers(); subAdjust();
+  route();
+  if(!skulptReady()) setTimeout(()=>{ if(!skulptReady() && view==="team"){ const o=$("#out"); if(o) setOut("بايثون ما تحمّلت. افحصوا الإنترنت وحدّثوا الصفحة.","bad"); } },12000);
+})();
+</script>
+</body>
+</html>
